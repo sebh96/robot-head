@@ -1,0 +1,33 @@
+[project]
+name = "robot-head"
+version = "0.1.0"
+description = "LLM-driven animatronic head prototype: listens, sees, talks and moves (simulated or PCA9685 servos)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "cv2-enumerate-cameras>=1.1",
+    "fastapi>=0.110",
+    "faster-whisper>=1.1",
+    "kokoro-onnx>=0.4",
+    "livekit>=1.0",
+    "numpy>=1.26",
+    "onnx-asr[hub]>=0.7",
+    "openai>=1.60",
+    "opencv-python>=4.8",
+    "piper-tts>=1.3",
+    "python-dotenv>=1.0",
+    "sounddevice>=0.4.6",
+    "soundfile>=0.12",
+    "soxr>=0.3",
+    "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+pi = ["adafruit-circuitpython-servokit>=1.3"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

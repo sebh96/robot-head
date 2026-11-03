@@ -1,0 +1,146 @@
+# robot-head
+
+A prototype brain for an LLM-driven animatronic head. It listens through your microphone, sees through your webcam, answers with a voice, and moves a head. For now the head is a cartoon in the browser-based control panel; later it can drive real servos on a Raspberry Pi without any code changes.
+
+Out of the box it's **Daniel**: a mean, edgy gamer with long hair, a big beard and sunglasses he never takes off, who judges everything you do. Swap him for someone else, or write your own characters, in the control panel.
+
+![The control panel's Live tab: Daniel looking smug, the conversation beside him, and puppet buttons below](docs/control-panel.jpg)
+
+The **Wiring** tab shows the real build, live: the Raspberry Pi, the PCA9685 servo board, the servo power supply, and every servo where it sits in the head, with its channel, angle and pulse width. Servos glow green while they move.
+
+![The Wiring tab: Pi, PCA9685 and power brick on the left, cables fanning out to seven servos placed in an X-ray view of the head](docs/wiring.jpg)
+
+Everything runs on your computer except the language model, which you reach through [OpenRouter](https://openrouter.ai).
+
+## Quick start
+
+You need Python 3.10+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+cd robot-head
+uv sync
+cp .env.example .env        # then put your OpenRouter key in .env
+```
+
+Pick your microphone, speaker and camera. Each choice gets a quick check (a level meter, a chime, a camera preview) and is saved to `.env`:
+
+```bash
+uv run python -m robot_head --choose-devices
+```
+
+Try it by typing first, then by talking:
+
+```bash
+uv run python -m robot_head --text
+```
+
+```bash
+uv run python -m robot_head
+```
+
+At startup it prints which speaker, microphone and camera it is using, and the address of the control panel. The first run downloads the Kokoro voice model (about 350 MB), the Parakeet speech recognition model (about 650 MB) and the face detector (230 KB). Press Ctrl+C in the terminal to quit. `--no-camera` and `--no-web` turn those parts off, and `--mute` starts with the voice muted. Run with `--help` to see every option.
+
+## Control panel
+
+While it runs, open **http://127.0.0.1:8765** in a browser:
+
+- **Live**: the head itself, moving in real time, with the camera's view in the corner (the tracked face is boxed in green). Next to it: everything it hears and says, a box to type to it (handy for testing a prompt without talking), a mute switch, and puppet buttons that play any expression, gesture or glance on the head right away.
+- **Wiring**: how the real build is hooked up, animated live. It shows Raspberry Pi pins 1, 3, 5 and 6 going to the PCA9685, the separate servo power supply, and each servo where it sits in the head (lids above the eyes, the eye servos between them, the jaw at its hinge, the three neck servos stacked in the neck). Each servo shows its channel, model, live angle and pulse width, and its arm turns as it moves.
+- **Personalities**: create, edit, duplicate and delete characters, and switch between them instantly. Each one has a name, the name it answers to, a voice and speed (empty uses the defaults from Settings), and its system prompt. They're stored in `robot.db`. The first one is imported from `personality.md`, and a friendly example called Bolt comes along.
+- **Expressions**: every facial expression is a set of five values: eyelid openness, chin tilt, head lean, and where the eyes drift sideways and up or down. Drag a slider and the head shows the result live; save to keep it. Add your own, and they become cues the LLM can use.
+- **Settings**: everything from `.env`, grouped and explained. Most changes apply immediately; the ones marked *restart* (devices, recognition and voice engines, motors) take effect the next time you start it.
+
+The panel only listens on this computer by default, because the settings include your API key. Set `WEB_HOST=0.0.0.0` to reach it from your phone, but only on a network you trust.
+
+## Talking to it
+
+- **Say its name to get its attention**, like "Hey Daniel, what do you think of my setup?". Anything said without the name is ignored, and the console shows it as `(not talking to me: …)`. Each personality has its own name; leave it empty to have it answer everything.
+- **Then just keep talking.** After it answers, it listens without the name for `FOLLOW_UP_SECONDS` (20 s). Its eyelids droop when it stops paying attention.
+- **Interrupt it any time.** Talk over it for about a third of a second and it stops mid-sentence and listens. Its own voice is removed from the microphone with WebRTC echo cancellation (the same one browsers use for video calls), so this works through speakers, not just headphones.
+- **It judges you unprompted.** If it can see you and nobody has said anything for `REMARK_AFTER_SECONDS` (45 s), it comments on whatever you're doing. Each time you ignore it, it waits twice as long before the next one.
+
+## How it works
+
+The head has two layers, because an LLM is far too slow to steer motors directly:
+
+```
+ microphone ──► audio.py (echo cancelling, speech detection) ──► ears.py (Parakeet) ──────┐
+ speaker ◄──── audio.py ◄── voice.py (Kokoro or Piper TTS)                                 │
+                                                     conversation.py (name, follow-ups, ◄──┘
+                                                     interruptions, unprompted remarks)
+                                                                    │
+ webcam ──► camera.py ── snapshot with every message ──► brain.py (OpenRouter LLM)
+               │                                            │ streamed reply with [cues]
+               │ face position, 30x a second                ▼
+               │                                   cues.py splits sentences and cues
+               ▼                                     │                │
+         reflexes.py  ◄───── cues, jaw level ────────┤                ▼
+   (gaze, blinking, breathing,                        └──────── voice.py (Piper TTS)
+    gestures, jaw smoothing)
+               │ pose: 7 joints, normalized
+               ▼
+         motors.py ──► PCA9685 servos (or nothing, when simulated)
+               └─────► wiring.py ──► control panel: face and wiring views (web.py, web/index.html)
+```
+
+- **Reflex layer** (`reflexes.py`): runs 30 times a second without asking the LLM. It follows your face (eyes jump first, then the neck catches up), glances around when nobody is there, blinks, breathes, looks up while "thinking", and opens the jaw in time with the speech audio.
+- **Brain** (`brain.py`): one streamed LLM call per turn. The current camera frame is attached to your message, which is how the head "sees". The model moves the head by writing cues inside its reply, such as `[surprised] Oh, is that a cat? [tilt_left] What's its name?`. Each cue fires when its sentence starts playing, so the gesture lands on the right words, and nothing waits for a second LLM round trip.
+- **Speaking** starts as soon as the first sentence (or a long enough opening clause) has arrived, while the rest is still streaming in. Each next sentence's audio is generated in the background while the current one plays, so there are no gaps between sentences.
+
+Cues the model can use:
+
+| Kind | Cues |
+|---|---|
+| Expressions | `[neutral]` `[happy]` `[surprised]` `[sleepy]` `[angry]` `[sad]` `[curious]` `[smug]`, plus any you or the model add |
+| Gestures | `[nod]` `[shake]` `[tilt_left]` `[tilt_right]` `[roll_eyes]` |
+| Gaze | `[look_left]` `[look_right]` `[look_up]` `[look_down]` `[look_at_you]` |
+
+## Make it yours
+
+- **Character**: write and switch personalities in the control panel. The prompt you write comes first in the system prompt; the rules for speaking aloud, the camera and the cues are added after it automatically. `personality.md` is only read once, to create the first personality.
+- **Expressions**: when no expression fits, the model invents one mid-sentence, like `[disgusted lids=0.3 tilt=0.1 roll=-0.2 look=0,-0.3]`. It plays right away, is saved (marked *llm* in the panel), and works as `[disgusted]` from then on. It never overwrites expressions you made or edited, and it can keep at most 40 of its own.
+- **Look**: the face and the wiring diagram are drawn in the browser, in `robot_head/web/index.html` (`faceSVG` and the Wiring section). The face's colors are in `C` and `LENS_TINT` sets how dark the sunglasses are; `SPOTS` places each servo in the head on the diagram.
+- **Model**: any OpenRouter model that accepts images works; set `OPENROUTER_MODEL` in `.env`. Every reply prints `[brain] first words after …s`, so you can compare how quickly models respond. `REASONING_EFFORT=none` (the default) keeps replies quick: with Haiku 5.5 and a camera frame it started talking after about 1 s, while `low` took 3–6 s. Models that always think, like the Gemini Flash family, need `low` instead.
+- **Voice**: [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) is the default engine. It runs locally and sounds far more natural than Piper. Pick a voice with `TTS_VOICE` (`--list-voices` lists them; male ones start with `am_` for American or `bm_` for British) and set the pace with `TTS_SPEED`. `TTS_ENGINE=piper` switches to the lighter Piper voices.
+- **Speech recognition**: [NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) runs locally. On a Ryzen 5 5600X it transcribes a phrase in about 0.25 s, as accurately as Whisper models eight times slower. `STT_ENGINE=whisper` switches to Whisper for languages Parakeet doesn't know; set `STT_LANGUAGE` with it, or Whisper guesses the language on every phrase.
+- **Language**: Parakeet understands 25 European languages, German included, without any setting. For a German voice, set `TTS_ENGINE=piper` and `TTS_VOICE=de_DE-thorsten-medium` (Kokoro has no German). The model answers in the language you speak.
+
+All settings are in `.env.example` with a comment each.
+
+## Moving to real servos
+
+The rest of the code only ever sees a pose: seven joints with normalized values (`motors.py`). Swapping the simulation for hardware is a settings change, and the control panel keeps showing the face and the wiring either way.
+
+The control panel's Wiring tab shows exactly this hookup, so you can use it as your reference while building.
+
+1. Raspberry Pi 5 with a PCA9685 16-channel servo board on I2C (enable I2C with `raspi-config`): Pi pin 1 (3V3) to VCC, pin 3 (SDA) to SDA, pin 5 (SCL) to SCL, pin 6 (GND) to GND.
+2. Power the servos from their own 5–6 V supply (5 A or more) into the board's V+ screw terminal, never from the Pi. The grounds are shared through the board.
+3. `uv sync --extra pi`, then set `MOTORS=pca9685` in `.env`.
+4. **Before you attach any linkage**, find each joint's safe angle range one servo at a time and enter it in `JOINTS` in `motors.py`. The current numbers are placeholders. If a servo turns the wrong way, swap its `angle_min` and `angle_max`.
+5. Mount the camera on the body or base, not inside the moving head. Face tracking treats the camera image as fixed directions in the room.
+
+Default joints and channels, numbered from the top of the head down so the cables don't cross: `lids` 0, `eyes_y` 1, `eyes_x` 2, `jaw` 3 (small MG90S servos), and `neck_tilt` 4, `neck_roll` 5, `neck_pan` 6 (MG996R servos, which have the torque for a head). Leave out the ones your mechanism doesn't have; the Wiring tab follows whatever is in `JOINTS`. Open-source eye mechanisms that use small servos, such as Will Cogley's 3D-printed design, fit this layout.
+
+## Known limits and next steps
+
+- **Interrupting is tuned on a simulated room.** In a real room with loud speakers it may need adjusting: if it cuts itself off, turn the volume down or set `BARGE_IN=false`.
+- **Kokoro is slower than Piper.** On a Ryzen 5 5600X it generates speech about 3x faster than real time, so replies start roughly 1–1.5 s later than with Piper (about 2–3.5 s after you stop talking in total). Short replies keep this down. On a Raspberry Pi, use Piper.
+- **No memory between runs.** It only remembers the last 12 exchanges of the current session.
+- **Speech detection is simple.** It measures background noise at startup and then reacts to loudness. In a noisy room, raise `SILENCE_SECONDS` or use a directional microphone.
+- **Name spotting runs speech recognition on everything it hears.** That's fine on a PC; on a Raspberry Pi, a dedicated wake-word model (like openWakeWord) would be lighter.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| The head looks away from you instead of at you | `CAMERA_FLIP=true` |
+| "Could not open camera", or the wrong camera | `--choose-devices`, or run with `--no-camera` |
+| It never notices you speaking, or triggers on noise | Pick the right microphone with `--choose-devices`; stay quiet during the 1-second calibration at startup |
+| No sound, or sound from the wrong device | Pick the speaker with `--choose-devices` |
+| "No microphone matches …" after unplugging something | Plug it back in, or pick another with `--choose-devices` |
+| It cuts you off mid-sentence | Raise `SILENCE_SECONDS` to 1.2 |
+| It ignores you | Say its name; check the console's `(not talking to me: …)` lines to see what it heard |
+| It interrupts itself, or prints `(my own voice came back: …)` a lot | Lower the speaker volume or move it away from the mic; `BARGE_IN=false` turns interrupting off |
+| Wrong words get transcribed | Set `SAVE_RECORDINGS=true`, talk to it, and listen to the clips in `recordings/` next to `transcripts.txt`. Quiet or cut-off clips point at the microphone (pick another with `--choose-devices`, or move closer) or at `SILENCE_SECONDS` |
+
+Run the tests with `uv run pytest`.

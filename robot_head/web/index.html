@@ -1,0 +1,789 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot control</title>
+<style>
+  :root {
+    --bg: #15171c; --panel: #1e2128; --panel-2: #262a33; --border: #323743;
+    --text: #e9e9ec; --dim: #9aa1ad; --accent: #59cf8b; --accent-ink: #0d2117;
+    --warn: #e5ad4f; --danger: #e0625f; --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  header { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+           padding: 12px 20px; background: var(--bg); border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0 6px 0 0; font-size: 17px; }
+  .pill { padding: 3px 10px; border-radius: 999px; background: var(--panel-2); color: var(--dim); font-size: 13px; white-space: nowrap; }
+  .pill b { color: var(--text); font-weight: 600; }
+  .pill.offline b { color: var(--danger); }
+  nav { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+  nav button { padding: 6px 14px; border: 1px solid transparent; border-radius: 8px; background: none; color: var(--dim); cursor: pointer; }
+  nav button:hover { color: var(--text); }
+  nav button.active { background: var(--panel-2); border-color: var(--border); color: var(--text); }
+  .switch { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 13px; cursor: pointer; }
+  #restart-banner { padding: 8px 20px; background: #3a2f17; color: var(--warn); font-size: 14px; }
+  main { max-width: 1280px; margin: 0 auto; padding: 20px; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  h2 { margin: 0 0 12px; font-size: 16px; }
+  h3 { margin: 16px 0 8px; font-size: 13px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .dim { color: var(--dim); }
+  .small { font-size: 13px; }
+  .live { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  .stack { display: grid; gap: 16px; }
+  .split { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .live, .split { grid-template-columns: 1fr; } nav { margin-left: 0; } }
+
+  /* Face */
+  .face-wrap { position: relative; }
+  .face-view { display: block; width: 100%; height: auto; background: #202020; border-radius: 8px; }
+  #camera { position: absolute; top: 10px; right: 10px; width: 30%; border-radius: 6px; border: 1px solid #ffffff30;
+            box-shadow: 0 4px 14px #0008; }
+  .face-mini { width: 220px; flex: none; }
+
+  /* Conversation */
+  .log { height: 540px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 4px 2px 8px; }
+  .event { padding: 7px 11px; border-radius: 8px; background: var(--panel-2); max-width: 90%; overflow-wrap: anywhere; }
+  .event time { margin-right: 8px; color: var(--dim); font-size: 12px; }
+  .event.you { align-self: flex-end; background: #233a2e; }
+  .event.robot { align-self: flex-start; }
+  .event.ignored, .event.info { align-self: center; background: none; color: var(--dim); font-size: 13px; }
+  .event.error { align-self: center; background: #3a1f1f; color: #f2a5a3; font-size: 13px; }
+
+  /* Controls */
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row.end { justify-content: flex-end; flex-wrap: wrap; }
+  input, select, textarea { width: 100%; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+  input:focus, select:focus, textarea:focus { outline: 2px solid #3b7a57; border-color: transparent; }
+  textarea { resize: vertical; line-height: 1.5; }
+  input[type=checkbox] { width: auto; accent-color: var(--accent); }
+  input[type=range] { padding: 0; accent-color: var(--accent); background: none; border: 0; }
+  button.btn { padding: 8px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); cursor: pointer; white-space: nowrap; }
+  button.btn:hover { border-color: #4a5160; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.danger { color: var(--danger); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel-2); cursor: pointer; font-size: 14px; }
+  .chip:hover { border-color: var(--accent); }
+  .chip.current { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px; cursor: pointer; }
+  .list li:hover { background: var(--panel-2); }
+  .list li.selected { background: var(--panel-2); outline: 1px solid var(--border); }
+  .badge { padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--panel-2); color: var(--dim); }
+  .badge.on { background: var(--accent); color: var(--accent-ink); }
+  .badge.llm { background: #2c2a4a; color: #b7b0ff; }
+  .badge.user { background: #1f3a3a; color: #8fe0d8; }
+  .badge.restart { background: #3a2f17; color: var(--warn); }
+  .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .head h2 { margin: 0; }
+  label.field { display: flex; flex-direction: column; gap: 5px; font-size: 14px; color: var(--dim); }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .faces { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+  .faces-intro { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+  .slider { display: grid; grid-template-columns: 52px 1fr 44px; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
+  .slider output { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+  fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px 6px; margin: 0 0 16px; background: var(--panel); }
+  legend { padding: 0 6px; font-weight: 600; }
+  .setting { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 4px 16px; padding: 8px 0; border-top: 1px solid var(--border); }
+  .setting:first-of-type { border-top: 0; }
+  .setting .help { grid-column: 1 / -1; font-size: 13px; color: var(--dim); }
+  .setting .name { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  @media (max-width: 640px) { .setting { grid-template-columns: 1fr; } }
+  .save-bar { position: sticky; bottom: 0; padding: 12px 0; background: linear-gradient(transparent, var(--bg) 35%); }
+  #toast { position: fixed; right: 20px; bottom: 20px; max-width: 420px; padding: 10px 14px; border-radius: 8px;
+           background: var(--panel-2); border: 1px solid var(--border); opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+  #toast.bad { border-color: var(--danger); color: #f2a5a3; }
+
+  /* Wiring diagram */
+  #wiring-diagram { display: block; width: 100%; height: auto; }
+  #wiring-diagram text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #wiring-diagram .title { fill: var(--text); font-size: 15px; font-weight: 600; }
+  #wiring-diagram .note { fill: var(--dim); font-size: 12px; }
+  #wiring-diagram .pin-label { fill: #e8eef8; font-size: 11px; font-weight: 600; }
+  #wiring-diagram .wire { fill: none; stroke-width: 2.5; stroke-linecap: round; }
+  #wiring-diagram .strand { fill: none; stroke-width: 2; stroke-linecap: round; }
+  #wiring-diagram .leader { stroke: #4b5363; stroke-width: 1; stroke-dasharray: 3 3; }
+  #wiring-diagram .lbl-name { fill: var(--text); font-size: 13px; font-weight: 600; }
+  #wiring-diagram .lbl-value { fill: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #wiring-diagram .arm { stroke: #edf0f5; stroke-width: 4; stroke-linecap: round; }
+  #wiring-diagram .range { fill: none; stroke: #ffffff38; stroke-width: 1.5; }
+  #wiring-diagram .servo-body { stroke: #5b6372; stroke-width: 1; transition: stroke .15s; }
+  #wiring-diagram .moving .servo-body { stroke: var(--accent); stroke-width: 2.5; filter: url(#glow); }
+  #wiring-diagram .moving .signal { stroke: var(--accent); stroke-dasharray: 7 5; animation: flow .45s linear infinite; }
+  #wiring-diagram .moving .lbl-name, #wiring-diagram .moving .lbl-value { fill: var(--accent); }
+  #wiring-diagram .moving .leader { stroke: var(--accent); }
+  #wiring-diagram .channel.used text { fill: #fff; }
+  @keyframes flow { to { stroke-dashoffset: -12; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Robot control</h1>
+  <span class="pill" id="pill-personality">Playing <b id="st-personality">…</b></span>
+  <span class="pill" id="pill-mode">Mode <b id="st-mode">…</b></span>
+  <span class="pill">Face <b id="st-expression">…</b></span>
+  <label class="switch"><input type="checkbox" id="mute"> Mute voice</label>
+  <nav>
+    <button data-tab="live" class="active">Live</button>
+    <button data-tab="wiring">Wiring</button>
+    <button data-tab="personalities">Personalities</button>
+    <button data-tab="expressions">Expressions</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+</header>
+<div id="restart-banner" hidden>Restart the robot to apply: <span id="restart-keys"></span></div>
+
+<main>
+  <section id="live" class="tab active">
+    <div class="live">
+      <div class="stack">
+        <div class="card">
+          <div class="face-wrap">
+            <svg class="face-view" viewBox="0 0 640 480" role="img" aria-label="The robot's face"></svg>
+            <img id="camera" alt="What the camera sees" hidden>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Puppet</h2>
+          <p class="dim small">Click to play it on the head right now.</p>
+          <h3>Expressions</h3><div id="puppet-expressions" class="chips"></div>
+          <h3>Gestures</h3><div id="puppet-gestures" class="chips"></div>
+          <h3>Look</h3><div id="puppet-gazes" class="chips"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Conversation</h2>
+        <div id="log" class="log"></div>
+        <form id="say-form" class="row">
+          <input id="say" placeholder="Type something to say to him…" autocomplete="off">
+          <button class="btn primary">Send</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section id="wiring" class="tab">
+    <div class="card">
+      <div class="head">
+        <h2>Wiring</h2>
+        <span class="dim small">Live. A servo glows green while it moves, and its cable carries the signal.</span>
+      </div>
+      <svg id="wiring-diagram" viewBox="0 0 1200 660" role="img" aria-label="Wiring diagram of the robot head"></svg>
+    </div>
+  </section>
+
+  <section id="personalities" class="tab">
+    <div class="split">
+      <div class="card">
+        <div class="head"><h2>Personalities</h2><button class="btn" id="new-personality">New</button></div>
+        <ul id="personality-list" class="list"></ul>
+      </div>
+      <form id="personality-form" class="card">
+        <div class="fields">
+          <label class="field">Name <input name="name" required></label>
+          <label class="field">Answers to <input name="wake_name" placeholder="Empty: answers everything"></label>
+          <label class="field">Voice <input name="voice" list="voice-list" placeholder="Default voice"></label>
+          <label class="field">Speed <input name="speed" type="number" step="0.05" min="0.5" max="2" placeholder="Default speed"></label>
+        </div>
+        <label class="field">System prompt
+          <textarea name="prompt" rows="16" required placeholder="You are …"></textarea>
+        </label>
+        <p class="dim small">Rules for speaking aloud, the camera and the movement cues are added automatically after this prompt.</p>
+        <div class="row end">
+          <button type="button" class="btn danger" id="delete-personality">Delete</button>
+          <button type="button" class="btn" id="duplicate-personality">Duplicate</button>
+          <button type="submit" class="btn">Save</button>
+          <button type="button" class="btn primary" id="use-personality">Save and use</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section id="expressions" class="tab">
+    <div class="card faces-intro">
+      <div>
+        <div class="head">
+          <h2>Expressions</h2>
+        </div>
+        <p class="dim small">Drag a slider to see it on the head. The LLM invents new ones when nothing fits;<br>they show up marked <span class="badge llm">llm</span>.</p>
+        <form id="new-expression" class="row" style="max-width: 360px">
+          <input name="name" placeholder="new_name" pattern="[a-z][a-z0-9_]{0,23}" title="lowercase letters, digits and _" required>
+          <button class="btn">Add</button>
+        </form>
+      </div>
+      <svg class="face-view face-mini" viewBox="0 0 640 480" role="img" aria-label="The robot's face"></svg>
+    </div>
+    <div id="faces" class="faces"></div>
+  </section>
+
+  <section id="settings" class="tab">
+    <form id="settings-form">
+      <div id="setting-groups"></div>
+      <div class="save-bar row end"><span id="settings-note" class="dim small"></span><button class="btn primary">Save settings</button></div>
+    </form>
+  </section>
+</main>
+
+<datalist id="voice-list"></datalist>
+<datalist id="model-list"></datalist>
+<div id="toast"></div>
+
+<script>
+const $ = selector => document.querySelector(selector);
+const el = (tag, props = {}, ...children) => {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children);
+  return node;
+};
+
+async function api(method, path, body) {
+  const response = await fetch(path, {
+    method,
+    headers: body === undefined ? {} : {"Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = (response.headers.get("content-type") || "").includes("json") ? await response.json() : null;
+  if (!response.ok) throw new Error((data && data.detail) || response.statusText);
+  return data;
+}
+
+let toastTimer;
+function toast(message, bad = false) {
+  const box = $("#toast");
+  box.textContent = message;
+  box.className = "show" + (bad ? " bad" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (box.className = ""), bad ? 6000 : 3000);
+}
+const failed = error => toast(error.message, true);
+
+// --- Tabs ---
+const loaders = {
+  live: loadLive, wiring: loadWiring, personalities: loadPersonalities, expressions: loadExpressions, settings: loadSettings,
+};
+let activeTab = "live";
+function showTab(name) {
+  activeTab = name;
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.id === name));
+  try { localStorage.setItem("tab", name); } catch {}
+  // Only stream the camera while it can be seen.
+  const camera = $("#camera");
+  if (name !== "live" && camera.getAttribute("src")) camera.removeAttribute("src");
+  loaders[name]().catch(failed);
+}
+document.querySelectorAll("nav button").forEach(b => (b.onclick = () => showTab(b.dataset.tab)));
+
+// --- The face, drawn from the pose the robot streams (a port of the old simulator window) ---
+const C = {
+  skin: "#e4bca5", skinShade: "#cda08a", hair: "#c09464", hairDark: "#9b7048", beard: "#50382e", beardDark: "#3c2922",
+  shirt: "#e6cade", shirtDye: "#dcafcd", lips: "#be807d", mouth: "#301e28", white: "#ebebeb", ink: "#282828",
+  lens: "#232d3c", frame: "#1e1e1e",
+};
+const LENS_TINT = 0.65;  // how dark the sunglasses are; 1 hides the eyes completely
+const stroke = (color, width) => `fill="none" stroke="${color}" stroke-width="${width}" stroke-linecap="round"`;
+const ellipse = (cx, cy, rx, ry, fill, extra = "") => `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="${fill}" ${extra}/>`;
+const line = (x1, y1, x2, y2, color, width) => `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" ${stroke(color, width)}/>`;
+const half = (cx, cy, rx, ry, upper, fill) => `<path d="M${cx - rx} ${cy}A${rx} ${ry} 0 0 ${upper ? 1 : 0} ${cx + rx} ${cy}Z" fill="${fill}"/>`;
+const lowerArc = (cx, cy, rx, ry, turn, color, width) =>
+  `<path d="M${cx + rx} ${cy}A${rx} ${ry} 0 0 1 ${cx - rx} ${cy}" transform="rotate(${turn} ${cx} ${cy})" ${stroke(color, width)}/>`;
+
+function faceSVG(p, id) {
+  // Seen from the front, so the robot's right is on the viewer's left. The body stays put.
+  let body = ellipse(320, 550, 270, 170, C.shirt);
+  for (const [dx, r] of [[-150, 34], [-60, 26], [40, 30], [140, 38]]) {
+    body += `<circle cx="${320 + dx}" cy="${440 + Math.floor(r / 3)}" r="${r}" fill="${C.shirtDye}"/>`;
+  }
+  const cx = 320 - p.neck_pan * 60, cy = 248 - p.neck_tilt * 40, drop = p.jaw * 18;
+  let h = ellipse(cx, cy + 30, 178, 235, C.hair);  // long hair, behind everything
+  for (const side of [-1, 1]) {
+    for (let i = 0; i < 3; i++) h += lowerArc(cx + side * (150 - 18 * i), cy + 90, 22, 150, side * 6, C.hairDark, 2);
+  }
+  h += ellipse(cx, cy, 122, 158, C.skin);
+  h += half(cx, cy - 40, 150, 178, true, C.hair) + half(cx, cy - 38, 92, 98, true, C.skin);  // middle part
+  h += line(cx, cy - 214, cx, cy - 138, C.hairDark, 3);
+  for (const side of [-1, 1]) {
+    h += ellipse(cx + side * 116, cy + 10, 30, 118, C.hair, `transform="rotate(${-side * 4} ${cx + side * 116} ${cy + 10})"`);
+    h += lowerArc(cx + side * 40, cy - 160, 60, 30, side * 25, C.hairDark, 2);
+  }
+  // Beard: the chin part drops with the jaw.
+  h += ellipse(cx, cy + 62, 126, 66, C.beard);
+  h += `<rect x="${cx - 118}" y="${cy + 62}" width="236" height="${18 + drop}" fill="${C.beard}"/>`;
+  h += half(cx, cy + 78 + drop, 124, 128, false, C.beard);
+  for (let x = -90; x <= 90; x += 30) h += line(cx + x, cy + 120 + drop, cx + x * 1.1, cy + 175 + drop, C.beardDark, 2);
+  const mouthY = cy + 80 + drop / 2;
+  h += ellipse(cx, mouthY, 24, 6 + p.jaw * 12, C.lips);
+  if (p.jaw > 0.05) h += ellipse(cx, mouthY, 19, 2 + p.jaw * 11, C.mouth);
+  h += ellipse(cx, cy + 62, 46, 14, C.beardDark);  // mustache
+  h += ellipse(cx, cy + 22, 15, 26, C.skinShade) + ellipse(cx, cy + 18, 11, 24, C.skin);  // nose
+  const ey = cy - 32;
+  for (const side of [-1, 1]) {
+    const ex = cx + side * 52, r = 24, clip = `${id}-eye${side}`;
+    h += `<clipPath id="${clip}"><circle cx="${ex}" cy="${ey}" r="${r}"/></clipPath>`;
+    h += `<circle cx="${ex}" cy="${ey}" r="${r}" fill="${C.white}"/>`;
+    h += `<circle cx="${ex - p.eyes_x * 12}" cy="${ey - p.eyes_y * 9}" r="10" fill="${C.ink}" clip-path="url(#${clip})"/>`;
+    h += `<rect x="${ex - r}" y="${ey - r}" width="${2 * r}" height="${(1 - p.lids) * 2 * r}" fill="${C.skin}" clip-path="url(#${clip})"/>`;
+    h += `<circle cx="${ex}" cy="${ey}" r="${r}" ${stroke(C.ink, 2)}/>`;
+    const brow = ey - 38 - (p.lids - 0.7) * 30;  // brows ride up with wide-open lids
+    h += line(ex - side * 6 - 26, brow + 4, ex - side * 6 + 26, brow - 2 * side, C.beard, 7);
+  }
+  for (const side of [-1, 1]) {  // sunglasses, see-through enough to watch the eyes
+    const lx = cx + side * 52;
+    h += ellipse(lx, ey, 40, 28, C.lens, `opacity="${LENS_TINT}"`) + ellipse(lx, ey, 40, 28, "none", stroke(C.frame, 3));
+    h += `<path d="M${lx - 28} ${ey - 12}A14 6 0 0 1 ${lx - 7} ${ey - 17.2}" transform="rotate(-20 ${lx - 14} ${ey - 12})" ${stroke(C.white, 2)}/>`;
+    h += line(cx + side * 92, ey - 6, cx + side * 122, ey - 12, C.frame, 3);
+  }
+  h += `<path d="M${cx - 13} ${ey - 2}A13 6 0 0 1 ${cx + 13} ${ey - 2}" ${stroke(C.frame, 3)}/>`;
+  return body + `<g transform="rotate(${-p.neck_roll * 20} ${cx} ${cy})">${h}</g>`;
+}
+
+// --- Live data from the robot: pose and servos ~30 times a second ---
+let frame = null, drawPending = false;
+const live = new EventSource("/api/live");
+live.onmessage = message => {
+  frame = JSON.parse(message.data);
+  if (!drawPending) { drawPending = true; requestAnimationFrame(draw); }
+};
+function draw() {
+  drawPending = false;
+  if (!frame) return;
+  $("#st-mode").textContent = frame.mode;
+  $("#st-expression").textContent = frame.expression;
+  document.querySelectorAll(".tab.active .face-view").forEach((svg, i) => (svg.innerHTML = faceSVG(frame.pose, `f${i}`)));
+  if (activeTab === "wiring") updateWiring(frame.servos);
+}
+
+// --- Events, status, conversation ---
+let lastEvent = 0, currentExpression = "";
+async function poll() {
+  try {
+    const state = await api("GET", `/api/state?after=${lastEvent}`);
+    $("#pill-mode").classList.remove("offline");
+    $("#st-personality").textContent = state.personality.name;
+    $("#mute").checked = state.muted;
+    currentExpression = state.expression;
+    const shown = [...document.querySelectorAll("#puppet-expressions .chip")].map(c => c.dataset.name);
+    if (meta && shown.join() !== state.expressions.join()) chips($("#puppet-expressions"), state.expressions);  // he learned one
+    document.querySelectorAll("#puppet-expressions .chip").forEach(c => c.classList.toggle("current", c.dataset.name === currentExpression));
+    $("#restart-banner").hidden = !state.restart_needed.length;
+    $("#restart-keys").textContent = state.restart_needed.join(", ");
+    const log = $("#log");
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    for (const event of state.events) {
+      lastEvent = event.id;
+      const text = event.text.replace(/^(you|robot): /, "");
+      log.append(el("div", {className: `event ${event.kind}`}, el("time", {textContent: event.time}), text));
+    }
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  } catch {
+    $("#pill-mode").classList.add("offline");
+    $("#st-mode").textContent = "offline";
+  }
+  setTimeout(poll, 1000);
+}
+
+$("#say-form").onsubmit = async event => {
+  event.preventDefault();
+  const text = $("#say").value.trim();
+  if (!text) return;
+  $("#say").value = "";
+  await api("POST", "/api/say", {text}).catch(failed);
+};
+$("#mute").onchange = () => api("POST", "/api/mute", {value: $("#mute").checked}).catch(failed);
+
+let meta;
+const cue = name => api("POST", "/api/cue", {name}).catch(failed);
+function chips(container, names) {
+  container.replaceChildren(...names.map(name => {
+    const chip = el("button", {className: "chip", type: "button", textContent: name.replaceAll("_", " ")});
+    chip.dataset.name = name;
+    chip.onclick = () => cue(name);
+    return chip;
+  }));
+}
+async function loadLive() {
+  meta = meta || await api("GET", "/api/meta");
+  const camera = $("#camera");
+  camera.hidden = !meta.camera;
+  if (meta.camera && !camera.getAttribute("src")) camera.src = "/api/camera.mjpg";
+  const expressions = await api("GET", "/api/expressions");
+  chips($("#puppet-expressions"), expressions.map(e => e.name));
+  chips($("#puppet-gestures"), meta.gestures);
+  chips($("#puppet-gazes"), meta.gazes);
+}
+
+// --- Wiring diagram ---
+// Where each servo sits, in an X-ray front view of the head. Joints added to motors.py line up at the bottom.
+const SPOTS = {
+  lids: [870, 146], eyes_y: [870, 202], eyes_x: [870, 258], jaw: [948, 318],
+  neck_tilt: [870, 420], neck_roll: [870, 482], neck_pan: [870, 548],
+};
+const PI = {x: 40, y: 70, w: 230, h: 150}, PSU = {x: 40, y: 452, w: 220, h: 130}, PCA = {x: 400, y: 140, w: 190, h: 372};
+const LABEL_X = 1046;
+const WIRE = {red: "#e05252", sda: "#4a90e2", scl: "#f2c94c", ground: "#80858f", signal: "#f5a623", servoGround: "#9a6a3c"};
+const channelY = channel => PCA.y + 34 + channel * 19.6;
+let wiringParts = null;
+
+const svgText = (x, y, text, cls, extra = "") => `<text x="${x}" y="${y}" class="${cls}" ${extra}>${text}</text>`;
+const curve = (x1, y1, x2, y2, bend = 90) => `M${x1} ${y1}C${x1 + bend} ${y1} ${x2 - bend} ${y2} ${x2} ${y2}`;
+
+function piBoard() {
+  const {x, y, w, h} = PI;
+  let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="#2e6b3c" stroke="#4e9a5e"/>`;
+  for (const [hx, hy] of [[x + 12, y + 12], [x + w - 12, y + 12], [x + 12, y + h - 12], [x + w - 12, y + h - 12]]) {
+    s += `<circle cx="${hx}" cy="${hy}" r="5" fill="#16181d" stroke="#c9b26a" stroke-width="1.5"/>`;
+  }
+  s += `<rect x="${x + 18}" y="${y + 6}" width="${20 * 9 + 6}" height="22" rx="2" fill="#111"/>`;  // GPIO header
+  for (let c = 0; c < 20; c++) {
+    for (const row of [0, 1]) s += `<rect x="${x + 21 + c * 9}" y="${y + 9 + row * 9}" width="5" height="5" fill="#d8b34a"/>`;
+  }
+  s += `<rect x="${x + 70}" y="${y + 58}" width="54" height="54" rx="4" fill="#b9bec7"/>` + svgText(x + 76, y + 89, "BCM2712", "", 'font-size="9" fill="#333"');
+  s += `<rect x="${x + 136}" y="${y + 62}" width="30" height="44" rx="2" fill="#16181d"/>`;  // memory
+  for (const py of [y + 40, y + 78]) s += `<rect x="${x + w - 6}" y="${py}" width="20" height="30" rx="2" fill="#c5cad3" stroke="#8b919b"/>`;  // USB
+  s += `<rect x="${x + w - 6}" y="${y + 114}" width="22" height="30" rx="2" fill="#d7dbe2" stroke="#8b919b"/>`;  // Ethernet
+  s += svgText(x + 14, y + h - 14, "Raspberry Pi 5", "title");
+  return s;
+}
+
+const piPin = n => [PI.x + 23 + Math.floor((n - 1) / 2) * 9, PI.y + (n % 2 ? 20 : 11)];  // odd pins on the inner row
+
+function supplyBrick() {
+  const {x, y, w, h} = PSU;
+  let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="#2a2e35" stroke="#4a505b"/>`;
+  for (let i = 0; i < 5; i++) s += `<line x1="${x + 120}" y1="${y + 22 + i * 10}" x2="${x + 190}" y2="${y + 22 + i * 10}" stroke="#3a3f49" stroke-width="4" stroke-linecap="round"/>`;
+  s += `<path d="M${x + 38} ${y + 18}l-14 26h12l-6 22 20-30h-12l8-18z" fill="#f2c94c"/>`;  // lightning bolt
+  s += svgText(x + 14, y + 92, "Servo power", "title") + svgText(x + 14, y + 110, "5–6 V, 5 A or more · never from the Pi", "note");
+  s += `<circle cx="${x + w}" cy="${y + 34}" r="7" fill="${WIRE.red}"/>` + svgText(x + w - 24, y + 39, "+", "pin-label");
+  s += `<circle cx="${x + w}" cy="${y + 62}" r="7" fill="#1b1d22" stroke="#80858f"/>` + svgText(x + w - 24, y + 66, "−", "pin-label");
+  return s;
+}
+
+function servoBoard(used) {
+  const {x, y, w, h} = PCA;
+  let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="#1f4f8f" stroke="#3f74bd"/>`;
+  for (const [hx, hy] of [[x + 12, y + 12], [x + w - 12, y + 12], [x + 12, y + h - 12], [x + w - 12, y + h - 12]]) {
+    s += `<circle cx="${hx}" cy="${hy}" r="5" fill="#16181d" stroke="#c9b26a" stroke-width="1.5"/>`;
+  }
+  s += svgText(x + 26, y + 30, "PCA9685", "title") + svgText(x + 26, y + 46, "16 channels · I2C 0x40", "note", 'fill="#b8c9e6"');
+  s += `<rect x="${x + 34}" y="${y + 150}" width="56" height="56" rx="3" fill="#15171c"/><circle cx="${x + 42}" cy="${y + 158}" r="2.5" fill="#666"/>`;
+  s += svgText(x + 38, y + 183, "PCA", "", 'font-size="10" fill="#aaa"') + svgText(x + 38, y + 196, "9685", "", 'font-size="10" fill="#aaa"');
+  for (const [i, name] of ["VCC", "SDA", "SCL", "GND"].entries()) {  // logic pins on the left edge
+    const py = y + 70 + i * 20;
+    s += `<rect x="${x - 4}" y="${py - 4}" width="8" height="8" fill="#d8b34a"/>` + svgText(x + 10, py + 4, name, "pin-label");
+  }
+  s += `<rect x="${x - 10}" y="${y + 292}" width="30" height="58" rx="3" fill="#2f8a4a" stroke="#4fb06c"/>`;  // screw terminal
+  for (const [i, name] of ["V+", "GND"].entries()) {
+    const py = y + 307 + i * 28;
+    s += `<circle cx="${x + 5}" cy="${py}" r="7" fill="#9aa1ad"/><line x1="${x}" y1="${py}" x2="${x + 10}" y2="${py}" stroke="#555" stroke-width="2"/>`;
+    s += svgText(x + 26, py + 4, name, "pin-label");
+  }
+  for (let channel = 0; channel < 16; channel++) {  // a 3-pin servo header per channel on the right edge
+    const cy = channelY(channel), on = used.has(channel);
+    s += `<g class="channel${on ? " used" : ""}">`;
+    s += `<rect x="${x + w - 40}" y="${cy - 6}" width="34" height="12" rx="2" fill="#111" opacity="${on ? 1 : 0.55}"/>`;
+    for (let k = 0; k < 3; k++) s += `<rect x="${x + w - 36 + k * 11}" y="${cy - 3}" width="6" height="6" fill="${on ? "#d8b34a" : "#6d6440"}"/>`;
+    s += svgText(x + w - 62, cy + 4, String(channel), "", `font-size="11" text-anchor="end" fill="${on ? "#fff" : "#8aa3c9"}"`);
+    s += `</g>`;
+  }
+  return s;
+}
+
+function headOutline() {
+  let s = `<ellipse cx="870" cy="218" rx="140" ry="172" fill="#1a1d23" stroke="#3b4250" stroke-width="2"/>`;
+  s += `<rect x="826" y="384" width="88" height="190" rx="18" fill="#1a1d23" stroke="#3b4250" stroke-width="2"/>`;
+  s += `<path d="M690 650C715 600 790 590 826 584L914 584C950 590 1025 600 1050 650" fill="#1a1d23" stroke="#3b4250" stroke-width="2"/>`;
+  for (const ex of [815, 925]) s += `<circle cx="${ex}" cy="202" r="25" fill="none" stroke="#4a5263" stroke-width="2"/><circle cx="${ex}" cy="202" r="8" fill="#2f3542"/>`;
+  s += `<path d="M800 316Q870 350 940 316" fill="none" stroke="#3b4250" stroke-width="2"/>`;  // jaw line
+  s += svgText(870, 40, "Head, X-ray view", "note", 'text-anchor="middle"');
+  return s;
+}
+
+function servoParts(info, index) {
+  const [sx, sy] = SPOTS[info.name] || [720 + index * 70, 620];
+  const big = info.servo === "MG996R";
+  const w = big ? 58 : 44, h = big ? 26 : 20, ear = big ? 10 : 8, arm = big ? 22 : 16;
+  const fill = big ? "#1d1f24" : "#2f6fd0";
+  const hub = sx + w / 2 - h / 2;  // the output shaft sits toward one end
+  const attach = sx - w / 2 - ear;
+  const cy = channelY(info.channel);
+  const point = (deg, r) => [hub - r * Math.cos(deg * Math.PI / 180), sy - r * Math.sin(deg * Math.PI / 180)];
+  const [ax, ay] = point(info.angle_min, arm + 5), [bx, by] = point(info.angle_max, arm + 5);
+
+  const cable = `<g class="cable" data-name="${info.name}">` +
+    `<path class="strand signal" d="${curve(PCA.x + PCA.w, cy - 3, attach, sy - 3, 120)}" stroke="${WIRE.signal}"/>` +
+    `<path class="strand" d="${curve(PCA.x + PCA.w, cy, attach, sy, 120)}" stroke="${WIRE.red}"/>` +
+    `<path class="strand" d="${curve(PCA.x + PCA.w, cy + 3, attach, sy + 3, 120)}" stroke="${WIRE.servoGround}"/></g>`;
+
+  const servo = `<g class="servo" data-name="${info.name}">` +
+    `<rect x="${sx - w / 2 - ear}" y="${sy - 4}" width="${w + 2 * ear}" height="8" rx="2" fill="${fill}" opacity=".85"/>` +
+    `<circle cx="${sx - w / 2 - ear / 2}" cy="${sy}" r="1.8" fill="#0008"/><circle cx="${sx + w / 2 + ear / 2}" cy="${sy}" r="1.8" fill="#0008"/>` +
+    `<rect class="servo-body" x="${sx - w / 2}" y="${sy - h / 2}" width="${w}" height="${h}" rx="4" fill="${fill}"/>` +
+    svgText(sx - w / 2 + 4, sy + 3.5, info.servo, "", `font-size="${big ? 8 : 7}" fill="#dbe4f3" opacity=".8"`) +
+    `<path class="range" d="M${ax} ${ay}A${arm + 5} ${arm + 5} 0 0 1 ${bx} ${by}"/>` +
+    `<g transform="translate(${hub} ${sy})"><g class="horn"><line class="arm" x1="0" y1="0" x2="${-arm}" y2="0"/></g>` +
+    `<circle r="${big ? 6 : 5}" fill="#edf0f5"/><circle r="1.8" fill="#888"/></g>` +
+    `<line class="leader" x1="${sx + w / 2 + ear + 4}" y1="${sy}" x2="${LABEL_X - 8}" y2="${sy}"/>` +
+    svgText(LABEL_X, sy - 3, `ch${info.channel} · ${info.name}`, "lbl-name") +
+    svgText(LABEL_X, sy + 13, "", "lbl-value") + `</g>`;
+  return {cable, servo};
+}
+
+function legend() {
+  const x = 300, y = 560;
+  let s = svgText(x, y, "Servo cable", "note", 'font-weight="600" fill="#cfd5df"');
+  for (const [i, [color, name]] of [[WIRE.signal, "signal"], [WIRE.red, "V+"], [WIRE.servoGround, "ground"]].entries()) {
+    s += `<line x1="${x}" y1="${y + 16 + i * 18}" x2="${x + 28}" y2="${y + 16 + i * 18}" stroke="${color}" stroke-width="3" stroke-linecap="round"/>`;
+    s += svgText(x + 36, y + 20 + i * 18, name, "note");
+  }
+  s += `<rect x="${x + 120}" y="${y + 8}" width="30" height="16" rx="3" fill="#1d1f24" stroke="#5b6372"/>` + svgText(x + 158, y + 20, "MG996R · neck, needs torque", "note");
+  s += `<rect x="${x + 124}" y="${y + 36}" width="22" height="14" rx="3" fill="#2f6fd0" stroke="#5b6372"/>` + svgText(x + 158, y + 47, "MG90S · eyes, lids, jaw", "note");
+  return s;
+}
+
+async function loadWiring() {
+  if (wiringParts) return;
+  const servos = await api("GET", "/api/servos");
+  const used = new Set(servos.map(s => s.channel));
+  const parts = servos.map(servoParts);
+  // A tidy harness: each wire goes up off the header, over the board, down its right side and into
+  // the PCA9685. The leftmost pin runs highest and outermost, so no two wires ever cross.
+  const pins = [[1, WIRE.red], [3, WIRE.sda], [5, WIRE.scl], [6, WIRE.ground]];
+  let logic = "";
+  for (const [i, [pin, color]] of pins.entries()) {
+    const [px, py] = piPin(pin).map(v => v + 2.5), ty = PCA.y + 70 + i * 20;
+    const top = PI.y - 12 - (3 - i) * 9, side = PI.x + PI.w + 34 + (3 - i) * 11, r = 10;
+    logic += `<path class="wire" stroke="${color}" d="M${px} ${py}V${top + r}Q${px} ${top} ${px + r} ${top}` +
+      `H${side - r}Q${side} ${top} ${side} ${top + r}V${ty - r}Q${side} ${ty} ${side + r} ${ty}H${PCA.x - 4}"/>`;
+    logic += `<circle cx="${px}" cy="${py}" r="4" fill="${color}"/>`;
+  }
+  logic += svgText(PI.x + 14, PI.y + PI.h + 20, "pin 1 3V3 · pin 3 SDA · pin 5 SCL · pin 6 GND", "note");
+  const power =
+    `<path class="wire" d="${curve(PSU.x + PSU.w, PSU.y + 34, PCA.x - 2, PCA.y + 307, 70)}" stroke="${WIRE.red}" stroke-width="3.5"/>` +
+    `<path class="wire" d="${curve(PSU.x + PSU.w, PSU.y + 62, PCA.x - 2, PCA.y + 335, 70)}" stroke="${WIRE.ground}" stroke-width="3.5"/>`;
+  $("#wiring-diagram").innerHTML =
+    `<defs><filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3" result="blur"/>` +
+    `<feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>` +
+    headOutline() + piBoard() + supplyBrick() + servoBoard(used) + logic + power +
+    parts.map(p => p.cable).join("") + parts.map(p => p.servo).join("") + legend();
+  wiringParts = {};
+  for (const s of servos) {
+    wiringParts[s.name] = {
+      cable: document.querySelector(`#wiring-diagram .cable[data-name="${s.name}"]`),
+      servo: document.querySelector(`#wiring-diagram .servo[data-name="${s.name}"]`),
+    };
+  }
+}
+
+function updateWiring(servos) {
+  if (!wiringParts) return;
+  for (const s of servos) {
+    const part = wiringParts[s.name];
+    if (!part) continue;
+    part.cable.classList.toggle("moving", s.moving);
+    part.servo.classList.toggle("moving", s.moving);
+    part.servo.querySelector(".horn").setAttribute("transform", `rotate(${s.angle})`);
+    part.servo.querySelector(".lbl-value").textContent = `${s.angle.toFixed(1)}° · ${s.pulse} µs`;
+  }
+}
+
+// --- Personalities ---
+let personalities = [], selected = null;
+const form = $("#personality-form");
+
+async function loadPersonalities() {
+  personalities = await api("GET", "/api/personalities");
+  const voices = await api("GET", "/api/voices");
+  $("#voice-list").replaceChildren(...voices.map(v => el("option", {value: v})));
+  if (selected !== null && !personalities.some(p => p.id === selected)) selected = null;
+  if (selected === null && personalities.length) selected = (personalities.find(p => p.active) || personalities[0]).id;
+  renderPersonalities();
+}
+
+function renderPersonalities() {
+  $("#personality-list").replaceChildren(...personalities.map(p => {
+    const item = el("li", {className: p.id === selected ? "selected" : ""}, el("span", {textContent: p.name}));
+    if (p.active) item.append(el("span", {className: "badge on", textContent: "active"}));
+    item.onclick = () => { selected = p.id; renderPersonalities(); };
+    return item;
+  }));
+  const p = personalities.find(p => p.id === selected) || {name: "", wake_name: "", voice: "", speed: null, prompt: ""};
+  for (const key of ["name", "wake_name", "voice", "prompt"]) form.elements[key].value = p[key] || "";
+  form.elements.speed.value = p.speed ?? "";
+  $("#delete-personality").hidden = selected === null || Boolean(p.active);
+  $("#duplicate-personality").hidden = selected === null;
+}
+
+function personalityFromForm() {
+  const speed = form.elements.speed.value;
+  return {
+    name: form.elements.name.value, wake_name: form.elements.wake_name.value, voice: form.elements.voice.value,
+    speed: speed === "" ? null : Number(speed), prompt: form.elements.prompt.value,
+  };
+}
+
+async function savePersonality() {
+  if (!form.reportValidity()) return null;
+  const saved = selected === null
+    ? await api("POST", "/api/personalities", personalityFromForm())
+    : await api("PUT", `/api/personalities/${selected}`, personalityFromForm());
+  selected = saved.id;
+  await loadPersonalities();
+  return saved;
+}
+
+form.onsubmit = async event => {
+  event.preventDefault();
+  try { if (await savePersonality()) toast("Saved."); } catch (error) { failed(error); }
+};
+$("#use-personality").onclick = async () => {
+  try {
+    const saved = await savePersonality();
+    if (!saved) return;
+    await api("POST", `/api/personalities/${saved.id}/activate`);
+    await loadPersonalities();
+    toast(`He's ${saved.name} now.`);
+  } catch (error) { failed(error); }
+};
+$("#new-personality").onclick = () => { selected = null; renderPersonalities(); form.elements.name.focus(); };
+$("#duplicate-personality").onclick = () => {
+  const copy = personalityFromForm();
+  selected = null;
+  renderPersonalities();
+  Object.entries({...copy, name: copy.name + " (copy)"}).forEach(([key, value]) => (form.elements[key].value = value ?? ""));
+};
+$("#delete-personality").onclick = async () => {
+  const p = personalities.find(p => p.id === selected);
+  if (!p || !confirm(`Delete ${p.name}?`)) return;
+  try {
+    await api("DELETE", `/api/personalities/${p.id}`);
+    selected = null;
+    await loadPersonalities();
+    toast(`Deleted ${p.name}.`);
+  } catch (error) { failed(error); }
+};
+
+// --- Expressions ---
+const SLIDERS = [["lids", "Lids"], ["tilt", "Tilt"], ["roll", "Lean"], ["look_x", "Eyes ↔"], ["look_y", "Eyes ↕"]];
+let previewTimer;
+
+async function loadExpressions() {
+  meta = meta || await api("GET", "/api/meta");
+  const expressions = await api("GET", "/api/expressions");
+  $("#faces").replaceChildren(...expressions.map(faceCard));
+}
+
+function faceCard(face) {
+  const values = () => Object.fromEntries(SLIDERS.map(([key]) => [key, Number(card.querySelector(`[name=${key}]`).value)]));
+  const sliders = SLIDERS.map(([key, label]) => {
+    const [low, high] = meta.ranges[key];
+    const input = el("input", {type: "range", name: key, min: low, max: high, step: 0.01, value: face[key]});
+    const output = el("output", {textContent: Number(face[key]).toFixed(2)});
+    input.oninput = () => {
+      output.textContent = Number(input.value).toFixed(2);
+      clearTimeout(previewTimer);
+      previewTimer = setTimeout(() => api("POST", "/api/expressions/preview", values()).catch(failed), 60);
+    };
+    return el("label", {className: "slider"}, el("span", {textContent: label}), input, output);
+  });
+  const save = el("button", {className: "btn primary", type: "button", textContent: "Save"});
+  save.onclick = async () => {
+    try { await api("PUT", `/api/expressions/${face.name}`, values()); toast(`Saved ${face.name}.`); loadExpressions(); }
+    catch (error) { failed(error); }
+  };
+  const tryIt = el("button", {className: "btn", type: "button", textContent: "Try"});
+  tryIt.onclick = () => cue(face.name);
+  const remove = el("button", {className: "btn danger", type: "button", textContent: "Delete", hidden: face.name === "neutral"});
+  remove.onclick = async () => {
+    if (!confirm(`Delete ${face.name}?`)) return;
+    try { await api("DELETE", `/api/expressions/${face.name}`); loadExpressions(); } catch (error) { failed(error); }
+  };
+  const card = el("div", {className: "card"},
+    el("div", {className: "head"}, el("h2", {textContent: face.name}), el("span", {className: `badge ${face.source}`, textContent: face.source})),
+    ...sliders,
+    el("div", {className: "row end", style: "margin-top:10px"}, remove, tryIt, save));
+  return card;
+}
+
+$("#new-expression").onsubmit = async event => {
+  event.preventDefault();
+  const name = event.target.elements.name.value.trim();
+  try {
+    await api("PUT", `/api/expressions/${name}`, {});
+    event.target.reset();
+    await loadExpressions();
+    toast(`Added ${name}. Shape it with the sliders, then save.`);
+  } catch (error) { failed(error); }
+};
+
+// --- Settings ---
+async function loadSettings() {
+  const [settings, models] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/models").catch(() => [])]);
+  $("#model-list").replaceChildren(...models.map(m => el("option", {value: m})));
+  const groups = {};
+  for (const s of settings) (groups[s.group] = groups[s.group] || []).push(s);
+  $("#setting-groups").replaceChildren(...Object.entries(groups).map(([group, items]) =>
+    el("fieldset", {}, el("legend", {textContent: group}), ...items.map(settingRow))));
+  $("#settings-note").textContent = "";
+}
+
+const currentValue = input => (input.type === "checkbox" ? String(input.checked) : input.value.trim());
+
+function settingRow(s) {
+  let input;
+  if (s.kind === "bool") {
+    input = el("input", {type: "checkbox", checked: ["1", "true", "yes", "on"].includes((s.value || s.default).toLowerCase())});
+  } else if (s.options.length && s.kind !== "voice") {
+    input = el("select", {}, ...s.options.map(o => el("option", {value: o.value, textContent: o.label})));
+    if (s.value && !s.options.some(o => o.value === s.value)) input.append(el("option", {value: s.value, textContent: `${s.value} (not found)`}));
+    input.value = s.value || (s.options.some(o => o.value === "") ? "" : s.default);
+  } else {
+    input = el("input", {value: s.value, placeholder: s.default ? `Default: ${s.default}` : ""});
+    if (s.kind === "number") input.inputMode = "decimal";
+    if (s.kind === "secret") Object.assign(input, {type: "password", autocomplete: "off", placeholder: s.is_set ? "Saved. Type a new one to replace it" : "Not set"});
+    if (s.kind === "voice") input.setAttribute("list", "voice-list");
+    if (s.key === "OPENROUTER_MODEL") input.setAttribute("list", "model-list");
+  }
+  input.name = s.key;
+  input.dataset.initial = currentValue(input);
+  const name = el("div", {className: "name"}, el("span", {textContent: s.label}));
+  if (!s.live) name.append(el("span", {className: "badge restart", textContent: "restart"}));
+  const row = el("div", {className: "setting"}, name, input);
+  if (s.help) row.append(el("div", {className: "help", textContent: s.help}));
+  if (s.kind === "voice") api("GET", "/api/voices").then(v => $("#voice-list").replaceChildren(...v.map(x => el("option", {value: x})))).catch(() => {});
+  return row;
+}
+
+$("#settings-form").onsubmit = async event => {
+  event.preventDefault();
+  const changed = {};
+  for (const input of event.target.querySelectorAll("[name]")) {
+    const value = currentValue(input);
+    if (value !== input.dataset.initial && !(input.type === "password" && !value)) changed[input.name] = value;
+  }
+  if (!Object.keys(changed).length) { toast("Nothing changed."); return; }
+  try {
+    const result = await api("PUT", "/api/settings", changed);
+    const parts = [];
+    if (result.applied.length) parts.push(`Applied now: ${result.applied.join(", ")}.`);
+    if (result.restart.length) parts.push(`After a restart: ${result.restart.join(", ")}.`);
+    const errors = Object.entries(result.errors).map(([key, message]) => `${key}: ${message}`);
+    if (errors.length) toast(errors.join(" "), true); else toast(parts.join(" ") || "Saved.");
+    await loadSettings();
+    $("#settings-note").textContent = parts.join(" ");
+  } catch (error) { failed(error); }
+};
+
+// --- Start ---
+let firstTab = "live";
+try { firstTab = localStorage.getItem("tab") || "live"; } catch {}
+showTab(loaders[firstTab] ? firstTab : "live");
+poll();
+</script>
+</body>
+</html>
