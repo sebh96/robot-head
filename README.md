@@ -45,7 +45,7 @@ At startup it prints which speaker, microphone and camera it is using, and the a
 While it runs, open **http://127.0.0.1:8765** in a browser:
 
 - **Live**: the head itself, moving in real time, with the camera's view in the corner (the tracked face is boxed in green). Next to it: everything it hears and says, a box to type to it (handy for testing a prompt without talking), a mute switch, and puppet buttons that play any expression, gesture or glance on the head right away.
-- **Wiring**: how the real build is hooked up, animated live. It shows Raspberry Pi pins 1, 3, 5 and 6 going to the PCA9685, the separate servo power supply, and each servo where it sits in the head (lids above the eyes, the eye servos between them, the jaw at its hinge, the three neck servos stacked in the neck). Each servo shows its channel, model, live angle and pulse width, and its arm turns as it moves.
+- **Wiring**: how the real build is hooked up, animated live. It shows Raspberry Pi pins 1, 3, 5 and 6 going to the PCA9685, the separate servo power supply, and each servo where it sits in the head (lids above the eyes, the eye servos between them, the jaw at its hinge, the three neck servos stacked in the neck). Each servo shows its channel, model, live angle and pulse width, and its arm turns as it moves. Below the diagram you calibrate each servo's channel and safe range, moving it live (see *Running on a Raspberry Pi*).
 - **Personalities**: create, edit, duplicate and delete characters, and switch between them instantly. Each one has a name, the name it answers to, a voice and speed (empty uses the defaults from Settings), and its system prompt. They're stored in `robot.db`. The first one is imported from `personality.md`, and a second example comes along.
 - **Expressions**: every facial expression is a set of five values: eyelid openness, chin tilt, head lean, and where the eyes drift sideways and up or down. Drag a slider and the head shows the result live; save to keep it. Add your own, and they become cues the LLM can use.
 - **Memory**: everyone it has met, closest match first, with a dot on whoever is in view right now. Pick someone to see what it remembers about them: facts, preferences, habits, plans, and one-line summaries of past conversations. Edit or delete any memory, or add your own; memories you wrote or edited are never changed by the model. Name a person, merge two entries that turned out to be the same person, or forget someone completely (face, memories and journal). **Think it over** turns everything since the last time into memories right away instead of waiting.
@@ -113,22 +113,58 @@ Cues the model can use:
 
 All settings are in `.env.example` with a comment each.
 
-## Moving to real servos
+## Running on a Raspberry Pi
 
-The rest of the code only ever sees a pose: seven joints with normalized values (`motors.py`). Swapping the simulation for hardware is a settings change, and the control panel keeps showing the face and the wiring either way.
+The rest of the code only ever sees a pose: seven joints with normalized values (`motors.py`). Moving from the simulation to real servos is a settings change, and the control panel keeps showing the face and the wiring either way.
 
-The control panel's Wiring tab shows exactly this hookup, so you can use it as your reference while building.
+### What you need
 
-1. Raspberry Pi 5 with a PCA9685 16-channel servo board on I2C (enable I2C with `raspi-config`): Pi pin 1 (3V3) to VCC, pin 3 (SDA) to SDA, pin 5 (SCL) to SCL, pin 6 (GND) to GND.
-2. Power the servos from their own 5–6 V supply (5 A or more) into the board's V+ screw terminal, never from the Pi. The grounds are shared through the board.
-3. `uv sync --extra pi`, then set `MOTORS=pca9685` in `.env`.
-4. **Before you attach any linkage**, find each joint's safe angle range one servo at a time and enter it in `JOINTS` in `motors.py`. The current numbers are placeholders. If a servo turns the wrong way, swap its `angle_min` and `angle_max`.
-5. Mount the camera on the body or base, not inside the moving head. Face tracking treats the camera image as fixed directions in the room.
+- Raspberry Pi 5 with 4 GB, its 27 W power supply, the Active Cooler, and a 32 GB microSD card
+- A USB webcam (one with a built-in microphone saves buying a microphone) and a USB speaker, or a USB sound card with a small speaker. The Pi 5 has no headphone jack.
+- A PCA9685 16-channel servo board, 3 MG996R servos for the neck and 4 MG90S servos for the lids, eyes and jaw
+- A separate 5 V power supply of 10 A for the servos, a 1000 µF capacitor across its output, and servo extension cables
 
-Default joints and channels, numbered from the top of the head down so the cables don't cross: `lids` 0, `eyes_y` 1, `eyes_x` 2, `jaw` 3 (small MG90S servos), and `neck_tilt` 4, `neck_roll` 5, `neck_pan` 6 (MG996R servos, which have the torque for a head). Leave out the ones your mechanism doesn't have; the Wiring tab follows whatever is in `JOINTS`. Open-source eye mechanisms that use small servos, such as Will Cogley's 3D-printed design, fit this layout.
+### Wiring
+
+The Wiring tab shows exactly this hookup, so you can use it as your reference while building.
+
+1. PCA9685 to the Pi: pin 1 (3V3) to VCC, pin 3 (SDA) to SDA, pin 5 (SCL) to SCL, pin 6 (GND) to GND.
+2. The servo supply goes into the board's V+ screw terminal, never into the Pi. The grounds are shared through the board.
+3. Servos on channels numbered from the top of the head down, so the cables don't cross: `lids` 0, `eyes_y` 1, `eyes_x` 2, `jaw` 3 (MG90S), `neck_tilt` 4, `neck_roll` 5, `neck_pan` 6 (MG996R, which have the torque for a head). Rest the head on a turntable bearing rather than on the pan servo's shaft.
+4. Mount the camera on the body or base, not inside the moving head. Face tracking treats the camera image as fixed directions in the room.
+
+Open-source eye mechanisms that use small servos, such as Will Cogley's 3D-printed design, fit this layout. Leave out joints your mechanism doesn't have by removing them from `JOINTS` in `motors.py`.
+
+### Installing
+
+1. With [Raspberry Pi Imager](https://www.raspberrypi.com/software/), put **Raspberry Pi OS Lite (64-bit)** on the card. In its settings, set the hostname to `robot-head`, a user name and password, your Wi-Fi, and turn on SSH.
+2. Plug in the webcam and the speaker, start the Pi and log in from your PC: `ssh you@robot-head.local`
+3. Get the code and run the installer:
+
+   ```bash
+   git clone https://github.com/sebh96/robot-head.git
+   cd robot-head
+   bash pi/install.sh
+   ```
+
+   It installs what's needed, turns on I2C, sets the Piper voice and real servos (Kokoro is too slow on a Pi), points the sound at your USB speaker and microphone, and sets the robot to start on every boot. It asks whether to open the control panel to your home network. Say yes only on a network you trust, because the panel shows your API key. Otherwise it prints an SSH command that brings the panel to your PC.
+4. `sudo reboot`. The first start downloads the speech models (about 1 GB), so give it a few minutes.
+5. Open the control panel, at `http://robot-head.local:8765` or through the SSH command the installer printed, and paste your OpenRouter key under Settings.
+6. **Calibrate every servo before attaching any linkage**: in the Wiring tab, pick a servo, drag **Try** slowly to the first end the mechanism may reach and click **Set** under Start, then do the same for the other end. **Test** sweeps between the two; **Save** keeps it. The defaults are placeholders. A servo that turns the wrong way just gets its Start and End the other way round.
+
+To keep your personalities, expressions and memories, copy `robot.db` from the PC into the robot-head folder on the Pi while the robot is stopped. A personality with a Kokoro voice talks with Piper's default voice there until you pick a Piper one.
+
+Everyday commands on the Pi:
+
+- See what it's doing: `journalctl -u robot-head -f`
+- Stop or start it: `sudo systemctl stop robot-head`, `sudo systemctl start robot-head`
+- Pick another camera (stop it first): `uv run python -m robot_head --choose-devices`
+- Update: `git pull && uv sync --frozen --extra pi`, then **Restart** in the control panel
+- After plugging in other sound devices, run `bash pi/install.sh` again.
 
 ## Known limits and next steps
 
+- **Not yet run on a real Raspberry Pi.** Every package has a ready-made build for it, and the installer and the servo driver are tested against stand-ins, but how fast speech recognition runs on a Pi 5 hasn't been measured.
 - **Interrupting is tuned on a simulated room.** In a real room with loud speakers it may need adjusting: if it cuts itself off, turn the volume down or set `BARGE_IN=false`.
 - **Kokoro is slower than Piper.** On a Ryzen 5 5600X it generates speech about 3x faster than real time, so replies start roughly 1–1.5 s later than with Piper (about 2–3.5 s after you stop talking in total). Short replies keep this down. On a Raspberry Pi, use Piper.
 - **Memory is tied to the closest face.** With two people in view, everything said goes to whoever is nearest. It recognizes faces at least 60 pixels wide, so at a few meters or in dim light it may not know who you are. Two entries for one person can happen after a big change of look or light; merge them in the Memory tab.

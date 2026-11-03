@@ -26,6 +26,12 @@ PIPER_DIR = MODELS_DIR / "voices"
 DEFAULT_VOICES = {"kokoro": "am_michael", "piper": "en_US-bryce-medium"}
 
 
+def voice_or_default(engine: str, voice: str) -> str:
+    """The voice if it is one of the engine's (Kokoro: am_michael, Piper: en_US-bryce-medium), else its default.
+    So a personality made for one engine still talks after switching to the other, say on a Raspberry Pi."""
+    return voice if voice and ("-" in voice) == (engine == "piper") else DEFAULT_VOICES[engine]
+
+
 def envelope(audio: np.ndarray, rate: int, fps: int = JAW_FPS) -> np.ndarray:
     """Loudness of the audio in ``fps`` steps per second, scaled 0..1 for the jaw."""
     hop = max(1, rate // fps)
@@ -55,7 +61,7 @@ class KokoroSpeech:
     def variant(self, voice: str, speed: float) -> KokoroSpeech:
         """The same model speaking with another voice or speed; switching is instant."""
         other = copy.copy(self)
-        other._use(voice or DEFAULT_VOICES["kokoro"], speed)
+        other._use(voice_or_default("kokoro", voice), speed)
         return other
 
     def _use(self, voice: str, speed: float) -> None:
@@ -88,7 +94,7 @@ class PiperSpeech:
         return sorted(path.stem for path in PIPER_DIR.glob("*.onnx"))
 
     def variant(self, voice: str, speed: float) -> PiperSpeech:
-        voice = voice or DEFAULT_VOICES["piper"]
+        voice = voice_or_default("piper", voice)
         if voice != self._voice:
             return PiperSpeech(voice, speed)
         from piper import SynthesisConfig
@@ -108,7 +114,7 @@ def make_speech(engine: str, voice: str = "", speed: float = 1.0) -> KokoroSpeec
     if engine not in DEFAULT_VOICES:
         raise ValueError(f"TTS_ENGINE must be kokoro or piper, not {engine!r}.")
     speech = KokoroSpeech if engine == "kokoro" else PiperSpeech
-    return speech(voice or DEFAULT_VOICES[engine], speed)
+    return speech(voice_or_default(engine, voice), speed)
 
 
 def print_voices(engine: str) -> None:

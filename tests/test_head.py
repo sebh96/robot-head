@@ -79,14 +79,20 @@ def test_reflexes_keep_every_joint_in_range():
 
 
 def test_wiring_lights_up_only_the_servos_that_move():
-    monitor = ServoMonitor()
+    motors = SimulatedMotors()
+    monitor = ServoMonitor(motors)
+
+    def show(pose, now):
+        motors.write(pose)
+        monitor.update(pose, now)
+
     pose = {name: joint.rest for name, joint in JOINTS.items()}
-    monitor.update(pose, 0.0)
-    monitor.update({**pose, "jaw": 0.8}, 0.03)
+    show(pose, 0.0)
+    show({**pose, "jaw": 0.8}, 0.03)
     assert monitor.moving == {"jaw"}
     jaw = next(s for s in monitor.snapshot()["servos"] if s["name"] == "jaw")
     assert (jaw["moving"], jaw["angle"], jaw["pulse"]) == (True, 118.0, pulse_width(118.0))
-    monitor.update({**pose, "jaw": 0.8}, 0.5)  # holding still lets it go dark again
+    show({**pose, "jaw": 0.8}, 0.5)  # holding still lets it go dark again
     assert monitor.moving == set()
     assert [s["channel"] for s in monitor.servos()] == sorted(joint.channel for joint in JOINTS.values())
 

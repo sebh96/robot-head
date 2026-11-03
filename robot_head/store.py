@@ -58,6 +58,12 @@ create table if not exists journal (
     text text not null,
     reflected integer not null default 0
 );
+create table if not exists servos (
+    joint text primary key,
+    channel integer not null,
+    angle_min real not null,
+    angle_max real not null
+);
 """
 
 
@@ -264,6 +270,25 @@ class Store:
     def prune_journal(self, before: float) -> None:
         with self._lock, self._db:
             self._db.execute("delete from journal where time < ? and reflected = 1", (before,))
+
+
+    # --- Servos: the channel and angle range calibrated for each joint (others keep the defaults) ---
+
+    def servos(self) -> dict[str, dict]:
+        with self._lock:
+            rows = self._db.execute("select joint, channel, angle_min, angle_max from servos").fetchall()
+        return {row["joint"]: {"channel": row["channel"], "angle_min": row["angle_min"], "angle_max": row["angle_max"]} for row in rows}
+
+    def save_servo(self, joint: str, channel: int, angle_min: float, angle_max: float) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "insert or replace into servos (joint, channel, angle_min, angle_max) values (?, ?, ?, ?)",
+                (joint, channel, angle_min, angle_max),
+            )
+
+    def reset_servo(self, joint: str) -> None:
+        with self._lock, self._db:
+            self._db.execute("delete from servos where joint = ?", (joint,))
 
 
 def person_label(person_id: int, name: str) -> str:

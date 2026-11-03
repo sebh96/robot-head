@@ -148,6 +148,18 @@
   #wiring-diagram .moving .leader { stroke: var(--accent); }
   #wiring-diagram .channel.used text { fill: #fff; }
   @keyframes flow { to { stroke-dashoffset: -12; } }
+
+  /* Servo calibration */
+  .servo-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .servo-table th { text-align: left; color: var(--dim); font-weight: 500; font-size: 12px; padding: 4px 8px; }
+  .servo-table td { padding: 8px; border-top: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+  .servo-table td > .pair { display: flex; gap: 6px; align-items: center; }
+  .servo-table input[type=number] { width: 68px; }
+  .servo-table select { width: 64px; }
+  .servo-table input[type=range] { width: 170px; }
+  .servo-table .actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .servo-table tr.holding td { background: #2a2614; }
+  .servo-table tr.holding .tried { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -214,6 +226,18 @@
         <span class="dim small">Live. A servo glows green while it moves, and its cable carries the signal.</span>
       </div>
       <svg id="wiring-diagram" viewBox="0 0 1200 660" role="img" aria-label="Wiring diagram of the robot head"></svg>
+    </div>
+    <div class="card" style="margin-top: 16px">
+      <div class="head"><h2>Calibrate servos</h2><button class="btn compact" id="release-servos">Give all back to the head</button></div>
+      <p class="dim small">Do this before attaching any linkage, one servo at a time. Drag <b>Try</b> slowly until the mechanism reaches the
+        first end it may go to and click <b>Set</b> under Start, then the other end and <b>Set</b> under End. <b>Test</b> sweeps between
+        the two. While you try angles, that servo holds still and the head leaves it alone.</p>
+      <div style="overflow-x: auto">
+        <table id="servo-table" class="servo-table">
+          <thead><tr><th>Joint</th><th>Channel</th><th>Start</th><th>End</th><th>Try</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
   </section>
 
@@ -330,11 +354,12 @@ const failed = error => toast(error.message, true);
 
 // --- Tabs ---
 const loaders = {
-  live: loadLive, wiring: loadWiring, personalities: loadPersonalities, expressions: loadExpressions,
-  memory: loadMemory, settings: loadSettings,
+  live: loadLive, wiring: () => Promise.all([loadWiring(), loadCalibration()]), personalities: loadPersonalities,
+  expressions: loadExpressions, memory: loadMemory, settings: loadSettings,
 };
 let activeTab = "live";
 function showTab(name) {
+  if (name !== "wiring") releaseServos();  // never leave a servo stuck where you were trying it
   activeTab = name;
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.id === name));
@@ -707,6 +732,104 @@ function updateWiring(servos) {
     part.servo.querySelector(".horn").setAttribute("transform", `rotate(${s.angle})`);
     part.servo.querySelector(".lbl-value").textContent = `${s.angle.toFixed(1)}° · ${s.pulse} µs`;
   }
+}
+
+// --- Servo calibration ---
+// What the start and end of each joint's range mean, so you know which end to look for first.
+const JOINT_ENDS = {
+  lids: "shut → wide open", eyes_y: "down → up", eyes_x: "left → right", jaw: "shut → open",
+  neck_tilt: "down → up", neck_roll: "left shoulder → right", neck_pan: "its left → its right",
+};
+const held = new Set();
+let holdQueue = {}, holdTimer = null;
+
+async function loadCalibration() {
+  const servos = await api("GET", "/api/servos");
+  held.clear();
+  servos.filter(s => s.held !== null).forEach(s => held.add(s.name));
+  $("#servo-table tbody").replaceChildren(...servos.map(servoRow));
+}
+
+// Slider moves arrive faster than a servo can follow; send the newest angle at most every 50 ms.
+function holdServo(name, angle) {
+  holdQueue[name] = angle;
+  held.add(name);
+  if (holdTimer) return;
+  holdTimer = setTimeout(async () => {
+    const queue = holdQueue;
+    holdQueue = {}, holdTimer = null;
+    for (const [joint, value] of Object.entries(queue)) {
+      await api("POST", `/api/servos/${joint}/hold`, {angle: value}).catch(failed);
+    }
+  }, 50);
+}
+
+function releaseServos() {
+  for (const name of held) {
+    fetch(`/api/servos/${name}/hold`, {method: "POST", keepalive: true, headers: {"Content-Type": "application/json"}, body: '{"angle": null}'});
+  }
+  held.clear();
+  document.querySelectorAll("#servo-table tr.holding").forEach(row => row.classList.remove("holding"));
+}
+addEventListener("pagehide", releaseServos);
+$("#release-servos").onclick = releaseServos;
+
+function servoRow(s) {
+  const current = frame?.servos?.find(f => f.name === s.name)?.angle ?? s.rest_angle;
+  const row = el("tr", {className: s.held !== null ? "holding" : ""});
+  const channel = el("select", {}, ...Array.from({length: 16}, (_, i) => el("option", {value: i, textContent: i, selected: i === s.channel})));
+  const start = el("input", {type: "number", min: 0, max: 180, step: 1, value: s.from});
+  const end = el("input", {type: "number", min: 0, max: 180, step: 1, value: s.to});
+  const tried = el("input", {type: "range", min: 0, max: 180, step: 1, value: Math.round(s.held ?? current)});
+  const triedLabel = el("b", {className: "tried", textContent: `${tried.value}°`});
+  const button = (text, title, onclick) => Object.assign(el("button", {className: "btn compact", type: "button", textContent: text, title}), {onclick});
+  const tryAngle = angle => {
+    tried.value = Math.round(angle);
+    triedLabel.textContent = `${tried.value}°`;
+    row.classList.add("holding");
+    holdServo(s.name, angle);
+  };
+  tried.oninput = () => tryAngle(Number(tried.value));
+  const sweep = async () => {
+    const a = Number(start.value), b = Number(end.value);
+    for (const [from, to] of [[a, b], [b, a]]) {
+      for (let i = 0; i <= 40; i++) {
+        tryAngle(from + (to - from) * i / 40);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    }
+  };
+  const save = async () => {
+    try {
+      await api("PUT", `/api/servos/${s.name}`, {channel: Number(channel.value), from: Number(start.value), to: Number(end.value)});
+      await api("POST", `/api/servos/${s.name}/hold`, {angle: null});
+      held.delete(s.name);
+      toast(`Saved ${s.name}.`);
+      wiringParts = null;  // channels may have moved: redraw the diagram
+      await Promise.all([loadWiring(), loadCalibration()]);
+    } catch (error) { failed(error); }
+  };
+  const reset = async () => {
+    try {
+      await api("DELETE", `/api/servos/${s.name}`);
+      wiringParts = null;
+      await Promise.all([loadWiring(), loadCalibration()]);
+      toast(`${s.name} is back to its defaults.`);
+    } catch (error) { failed(error); }
+  };
+  const changed = s.channel !== s.default.channel || s.from !== s.default.from || s.to !== s.default.to;
+  row.append(
+    el("td", {}, el("b", {textContent: s.name}), el("div", {className: "dim small", textContent: `${s.servo} · ${JOINT_ENDS[s.name] || ""}`})),
+    el("td", {}, channel),
+    el("td", {}, el("div", {className: "pair"}, start, button("Set", "Use the angle you're trying as the start", () => (start.value = tried.value)))),
+    el("td", {}, el("div", {className: "pair"}, end, button("Set", "Use the angle you're trying as the end", () => (end.value = tried.value)))),
+    el("td", {}, el("div", {className: "pair"}, tried, triedLabel)),
+    el("td", {}, el("div", {className: "actions"},
+      button("Test", "Sweep from start to end and back", sweep),
+      button("Save", "Keep this channel and range", save),
+      ...(changed ? [button("Default", "Back to the built-in channel and range", reset)] : []))),
+  );
+  return row;
 }
 
 // --- Personalities ---

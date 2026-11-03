@@ -18,6 +18,7 @@ from .config import DEFAULT_MODEL, PROJECT_DIR, Settings
 from .cues import GAZES, GESTURES
 from .devices import ENV_FILE, audio_devices, cameras, save_settings
 from .expressions import RANGES, Expression, clamped, from_settings, valid_name
+from .motors import JOINTS, calibrated
 from .store import Personality, Store
 
 MAX_LEARNED_EXPRESSIONS = 40  # so a chatty model can't fill the database with faces
@@ -88,7 +89,8 @@ SETTINGS = (
     SettingSpec("CAMERA_INDEX", "Camera", "Devices", "camera", live=False, default="0"),
     SettingSpec("CAMERA_FLIP", "Mirror the camera", "Devices", "bool", default="false"),
     SettingSpec("MOTORS", "Motors", "Hardware", "choice", live=False, choices=("sim", "pca9685"), default="sim",
-                help="sim only shows the head here in the control panel; pca9685 also drives real servos on a Raspberry Pi."),
+                help="sim only shows the head here in the control panel; pca9685 also drives real servos on a Raspberry Pi. "
+                     "Calibrate them in the Wiring tab."),
     SettingSpec("WEB_PORT", "Control panel port", "Control panel", "number", live=False, default="8765"),
     SettingSpec("WEB_HOST", "Control panel address", "Control panel", live=False, default="127.0.0.1",
                 help="0.0.0.0 opens it to your whole network, API key included. Only do that on a network you trust."),
@@ -292,6 +294,39 @@ class Controller:
             raise ValueError("Restarting only works when the robot was started with python -m robot_head.")
         self.log("info", "Restarting...")
         threading.Timer(0.3, self.on_restart).start()  # let the page get its answer first
+
+    # --- Servo calibration ---
+
+    def servos(self) -> list[dict]:
+        return self.monitor.servos() if self.monitor else []
+
+    def save_servo(self, name: str, data: dict) -> None:
+        """Set a joint's channel and angle range: "from" is the angle at the low end, "to" at the high end."""
+        if name not in JOINTS:
+            raise ValueError(f"There is no joint called {name}.")
+        try:
+            channel, start, end = int(data["channel"]), float(data["from"]), float(data["to"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("A servo needs a channel and two angles.") from None
+        if not 0 <= channel <= 15:
+            raise ValueError("The PCA9685 has channels 0 to 15.")
+        if not (0 <= start <= 180 and 0 <= end <= 180) or start == end:
+            raise ValueError("The angles must be two different numbers from 0 to 180.")
+        taken = next((other for other, joint in self.reflexes.motors.joints.items() if other != name and joint.channel == channel), None)
+        if taken:
+            raise ValueError(f"Channel {channel} is already used by {taken}.")
+        self.store.save_servo(name, channel, start, end)
+        self.reflexes.motors.set_joints(calibrated(self.store.servos()))
+
+    def reset_servo(self, name: str) -> None:
+        self.store.reset_servo(name)
+        self.reflexes.motors.set_joints(calibrated(self.store.servos()))
+
+    def hold_servo(self, name: str, angle: float | None) -> None:
+        """Keep one servo at an exact angle while you look for its limits; None gives it back to the head."""
+        if name not in JOINTS:
+            raise ValueError(f"There is no joint called {name}.")
+        self.reflexes.motors.hold(name, angle)
 
     # --- Personalities ---
 

@@ -16,7 +16,7 @@ from .control import Controller, starter_personalities
 from .conversation import Conversation
 from .devices import choose_devices, describe_audio, describe_camera, find_audio_device, list_devices
 from .memory import Memory
-from .motors import Pca9685Motors, SimulatedMotors
+from .motors import Pca9685Motors, SimulatedMotors, calibrated
 from .observer import Observer
 from .people import People
 from .reflexes import Reflexes
@@ -106,14 +106,26 @@ def main() -> None:
             camera = Camera(settings.camera_index, flip=settings.camera_flip)
         except RuntimeError as error:
             sys.exit(str(error))
-    motors = Pca9685Motors() if settings.motors == "pca9685" else SimulatedMotors()
-    monitor = ServoMonitor()
+    store = Store(PROJECT_DIR / "robot.db")
+    joints = calibrated(store.servos())
+    if settings.motors == "pca9685":
+        try:
+            motors = Pca9685Motors(joints)
+        except ImportError:
+            sys.exit("MOTORS=pca9685 needs the Raspberry Pi extras: uv sync --extra pi")
+        except OSError as error:
+            sys.exit(
+                f"Can't reach the servo board ({error}). Is I2C on (sudo raspi-config nonint do_i2c 0), and is the "
+                "PCA9685 wired to Pi pins 1, 3, 5 and 6? `i2cdetect -y 1` should list it at 40."
+            )
+    else:
+        motors = SimulatedMotors(joints)
+    monitor = ServoMonitor(motors)
     reflexes = Reflexes(motors, camera, monitor)
     stop = threading.Event()
     reflex_thread = threading.Thread(target=reflexes.run, args=(stop,), daemon=True)
     reflex_thread.start()
 
-    store = Store(PROJECT_DIR / "robot.db")
     store.seed(starter_personalities(settings))
     personality = store.active_personality()
     expressions = store.expressions()

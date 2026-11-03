@@ -12,7 +12,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .control import Controller
 
@@ -61,6 +61,16 @@ class PersonIn(BaseModel):
 
 class MergeIn(BaseModel):
     into: int
+
+
+class ServoIn(BaseModel):
+    channel: int
+    start: float = Field(alias="from")
+    to: float
+
+
+class HoldIn(BaseModel):
+    angle: float | None = None
 
 
 def _checked(action: Callable, *args):
@@ -114,7 +124,19 @@ def create_app(controller: Controller) -> FastAPI:
 
     @app.get("/api/servos")
     def servos() -> list[dict]:
-        return controller.monitor.servos() if controller.monitor else []
+        return controller.servos()
+
+    @app.put("/api/servos/{name}")
+    def save_servo(name: str, body: ServoIn) -> None:
+        _checked(controller.save_servo, name, body.model_dump(by_alias=True))
+
+    @app.delete("/api/servos/{name}")
+    def reset_servo(name: str) -> None:
+        _checked(controller.reset_servo, name)
+
+    @app.post("/api/servos/{name}/hold")
+    def hold_servo(name: str, body: HoldIn) -> None:
+        _checked(controller.hold_servo, name, body.angle)
 
     @app.post("/api/say")
     def say(body: Text) -> None:
