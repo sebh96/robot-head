@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
 from collections.abc import Callable
@@ -46,6 +47,20 @@ class Name(BaseModel):
 
 class Flag(BaseModel):
     value: bool
+
+
+class MemoryIn(BaseModel):
+    text: str
+    kind: str = "fact"
+    person_id: int | None = None
+
+
+class PersonIn(BaseModel):
+    name: str
+
+
+class MergeIn(BaseModel):
+    into: int
 
 
 def _checked(action: Callable, *args):
@@ -113,6 +128,51 @@ def create_app(controller: Controller) -> FastAPI:
     def mute(body: Flag) -> None:
         controller.set_muted(body.value)
 
+    @app.post("/api/restart")
+    def restart() -> None:
+        _checked(controller.restart)
+
+    @app.post("/api/pause")
+    def pause(body: Flag) -> None:
+        controller.set_paused(body.value)
+
+    @app.get("/api/people")
+    def people() -> list[dict]:
+        return controller.people_list()
+
+    @app.put("/api/people/{person_id}")
+    def rename_person(person_id: int, body: PersonIn) -> None:
+        _checked(controller.rename_person, person_id, body.name)
+
+    @app.delete("/api/people/{person_id}")
+    def delete_person(person_id: int) -> None:
+        controller.delete_person(person_id)
+
+    @app.post("/api/people/{person_id}/merge")
+    def merge_person(person_id: int, body: MergeIn) -> None:
+        _checked(controller.merge_people, person_id, body.into)
+
+    @app.get("/api/memories")
+    def memories(person: int | None = None) -> list[dict]:
+        """Memories about one person, or (without ``person``) the ones about nobody in particular."""
+        return controller.memories(person)
+
+    @app.post("/api/memories")
+    def add_memory(body: MemoryIn) -> None:
+        _checked(controller.save_memory, body.model_dump())
+
+    @app.put("/api/memories/{memory_id}")
+    def update_memory(memory_id: int, body: MemoryIn) -> None:
+        _checked(controller.save_memory, body.model_dump(), memory_id)
+
+    @app.delete("/api/memories/{memory_id}")
+    def delete_memory(memory_id: int) -> None:
+        controller.delete_memory(memory_id)
+
+    @app.post("/api/memory/reflect")
+    def reflect() -> None:
+        _checked(controller.reflect_now)
+
     @app.get("/api/personalities")
     def personalities() -> list[dict]:
         return controller.personalities()
@@ -166,6 +226,15 @@ def create_app(controller: Controller) -> FastAPI:
         return controller.models()
 
     return app
+
+
+def port_free(host: str, port: int) -> bool:
+    with socket.socket() as probe:
+        try:
+            probe.bind((host, port))
+        except OSError:
+            return False
+    return True
 
 
 def serve(app: FastAPI, host: str, port: int) -> uvicorn.Server:

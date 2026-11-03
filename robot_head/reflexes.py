@@ -20,6 +20,8 @@ from .motors import JOINTS, Pose, rest_pose
 IDLE_LIDS = 0.75  # droopier lids while nobody is talking to it
 GAZE_TARGETS = {"look_left": (-0.8, 0.0), "look_right": (0.8, 0.0), "look_up": (0.0, 0.7), "look_down": (0.0, -0.7)}
 THINKING_GAZE = (-0.35, 0.5)  # people glance up and away while they think
+SLEEPING_GAZE = (0.0, -0.45)  # paused: head down
+SLEEPING_LIDS = 0.06
 EYE_SHARE = 0.4  # part of a gaze shift the eyes cover before the neck catches up
 FACE_GAIN = 0.7  # a face at the edge of the camera image -> this much of the full gaze range
 LOOK_SECONDS = 2.5
@@ -132,7 +134,7 @@ class Reflexes:
             mode, expression, gesture, look = self._mode, self._expression, self._gesture, self._look
             jaw_target = self._jaw_target
         gx, gy = self._gaze_target(now, mode, look, face)
-        if mode != "thinking":
+        if mode not in ("thinking", "paused"):
             gx, gy = gx + expression.look_x, gy + expression.look_y
 
         # The neck drifts toward the target slowly; the eyes jump there and then
@@ -175,12 +177,14 @@ class Reflexes:
             "neck_roll": roll,
             "eyes_x": eyes_x,
             "eyes_y": eyes_y,
-            "lids": expression.lids * (IDLE_LIDS if mode == "idle" else 1.0) * (1 - self._blink(now)),
+            "lids": SLEEPING_LIDS if mode == "paused" else expression.lids * (IDLE_LIDS if mode == "idle" else 1.0) * (1 - self._blink(now)),
             "jaw": self._jaw,
         }
         return {name: JOINTS[name].clamp(value) for name, value in pose.items()}
 
     def _gaze_target(self, now, mode, look, face) -> tuple[float, float]:
+        if mode == "paused":
+            return SLEEPING_GAZE
         if mode == "thinking":
             return THINKING_GAZE
         if look is not None and now < look[2]:

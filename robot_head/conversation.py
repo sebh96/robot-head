@@ -19,6 +19,7 @@ from .voice import Voice
 
 REMARK_PROMPT = "(Nobody has said anything for a while. Make one short unprompted remark about what you see them doing.)"
 ECHO_SIMILARITY = 0.6
+QUIET_BEFORE_SUGGESTING = 10.0  # seconds nobody talked before it offers an unprompted recommendation
 
 
 def _words(text: str) -> list[str]:
@@ -70,9 +71,24 @@ class Conversation:
         self.inbox: queue.Queue[str] = queue.Queue()  # typed messages, from the terminal or the control panel
         self.log = log or (lambda kind, text: None)  # also shows lines in the control panel
         self.on_new_expression = on_new_expression  # called when the LLM invents an expression
+        self.on_exchange: Callable[[str | None, str], None] | None = None  # (what they said or None, the reply)
+        self.on_name: Callable[[str], None] | None = None  # someone told it their name
+        self.paused = False
         self._engaged_until = 0.0
         self._typing_only = False
         self._spoken: list[str] = []
+        self._suggestion: str | None = None  # an unprompted prompt waiting for a quiet moment
+        self._last_talk = time.monotonic()  # when someone last spoke or it last answered
+
+    def suggest(self, prompt: str) -> None:
+        """Say something unprompted once nobody has talked for a moment; a newer one replaces an older one."""
+        if not self.paused:
+            self._suggestion = prompt
+
+    def pause(self, paused: bool) -> None:
+        """While paused it sleeps: it hears nothing, answers nothing and says nothing unprompted."""
+        self.paused = paused
+        self._suggestion = None
 
     def run(self, stop: threading.Event, listen: Callable[[float], str | None] | None = None) -> None:
         """``listen(timeout)`` returns what was said, "" for sounds without words, or None if nobody spoke.
@@ -81,14 +97,31 @@ class Conversation:
         quiet_since = time.monotonic()
         ignored_remarks = 0
         while not stop.is_set():
+            if self.paused:
+                self.reflexes.set_mode("paused")
+                while (typed := self._typed(0.0)) is not None:
+                    self._note("ignored", f"(paused, not answering: {typed})")
+                if listen:
+                    listen(0.5)  # keeps the microphone drained; nothing it hears is used
+                else:
+                    stop.wait(0.5)
+                quiet_since = self._last_talk = time.monotonic()
+                continue
             self.reflexes.set_mode("listening" if self._engaged() else "idle")
             typed = self._typed(timeout=0.0 if listen else 1.0)
             heard = typed if typed is not None or listen is None else listen(0.5)
+            if self.paused:
+                continue  # paused while it was listening
             if heard is None:
+                if self._suggestion and time.monotonic() - self._last_talk >= QUIET_BEFORE_SUGGESTING:
+                    prompt, self._suggestion = self._suggestion, None
+                    self._note("info", "(recommending something)")
+                    self._answer(prompt, from_user=False)
+                    continue
                 # Being ignored makes it wait twice as long before the next remark.
                 delay = self.remark_after_seconds * 2**ignored_remarks
                 if delay and time.monotonic() - quiet_since >= delay and self._sees_someone():
-                    self._answer(REMARK_PROMPT)
+                    self._answer(REMARK_PROMPT, from_user=False)
                     quiet_since = time.monotonic()
                     ignored_remarks += 1
                 continue
@@ -102,7 +135,7 @@ class Conversation:
                     self._note("ignored", f"(not talking to me: {heard})")
                     continue
             self._note("you", f"you: {heard}")
-            quiet_since = time.monotonic()
+            quiet_since = self._last_talk = time.monotonic()
             ignored_remarks = 0
             self._answer(heard)
 
@@ -123,7 +156,7 @@ class Conversation:
     def _sees_someone(self) -> bool:
         return self.camera is not None and self.camera.face() is not None
 
-    def _answer(self, text: str) -> None:
+    def _answer(self, text: str, from_user: bool = True) -> None:
         self.reflexes.set_mode("thinking")
         image = self.camera.snapshot_jpeg() if self.camera and self.send_frames else None
         try:
@@ -134,7 +167,10 @@ class Conversation:
         except openai.APIError as error:
             self._note("error", f"OpenRouter error: {error}")
             self.reflexes.cue("sad")
-        self._engaged_until = time.monotonic() + self.follow_up_seconds
+        if self.on_exchange and self._spoken:
+            self.on_exchange(text if from_user else None, " ".join(self._spoken))
+        self._last_talk = time.monotonic()
+        self._engaged_until = self._last_talk + self.follow_up_seconds
 
     def _speak_reply(self, text: str, image: bytes | None) -> None:
         """Speak the reply sentence by sentence while the rest streams in; stop if interrupted.
@@ -178,6 +214,8 @@ class Conversation:
         return self.voice.prepare(segment.text) if segment.text else None
 
     def _perform(self, segment: Segment, audio: Future | None) -> bool:
+        if segment.learned_name and self.on_name:
+            self.on_name(segment.learned_name)
         for name, settings in segment.new_expressions.items():
             if self.on_new_expression:
                 self.on_new_expression(name, settings)

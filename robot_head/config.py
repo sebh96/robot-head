@@ -51,6 +51,19 @@ class Settings:
     follow_up_seconds: float
     remark_after_seconds: float
     barge_in: bool
+    observe_seconds: float
+    observe_frames: int
+    observe_change: float
+    observe_model: str
+    recommend_every_seconds: float
+    recommend_long_minutes: float
+    recommend_about: str
+    memory: bool
+    memory_reflect_minutes: float
+    memory_in_prompt: int
+    memory_keep_days: float
+    recognize_people: bool
+    face_match: float
     motors: str
     web_ui: bool
     web_host: str
@@ -81,6 +94,19 @@ def load_settings() -> Settings:
         follow_up_seconds=float(_get("FOLLOW_UP_SECONDS", "20")),
         remark_after_seconds=float(_get("REMARK_AFTER_SECONDS", "0")),
         barge_in=_flag("BARGE_IN", True),
+        observe_seconds=float(_get("OBSERVE_SECONDS", "0")),
+        observe_frames=int(float(_get("OBSERVE_FRAMES", "9"))),
+        observe_change=float(_get("OBSERVE_CHANGE", "6")),
+        observe_model=_get("OBSERVE_MODEL"),
+        recommend_every_seconds=float(_get("RECOMMEND_EVERY_SECONDS", "300")),
+        recommend_long_minutes=float(_get("RECOMMEND_LONG_MINUTES", "20")),
+        recommend_about=_get("RECOMMEND_ABOUT"),
+        memory=_flag("MEMORY", True),
+        memory_reflect_minutes=float(_get("MEMORY_REFLECT_MINUTES", "30")),
+        memory_in_prompt=int(float(_get("MEMORY_IN_PROMPT", "40"))),
+        memory_keep_days=float(_get("MEMORY_KEEP_DAYS", "30")),
+        recognize_people=_flag("RECOGNIZE_PEOPLE", True),
+        face_match=float(_get("FACE_MATCH", "0.4")),
         motors=_get("MOTORS", "sim"),
         web_ui=_flag("WEB_UI", True),
         web_host=_get("WEB_HOST", "127.0.0.1"),

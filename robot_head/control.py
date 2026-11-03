@@ -8,10 +8,12 @@ import threading
 import time
 import urllib.request
 from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
 from dotenv import dotenv_values
 
+from .brain import RECOMMEND_ABOUT
 from .config import DEFAULT_MODEL, PROJECT_DIR, Settings
 from .cues import GAZES, GESTURES
 from .devices import ENV_FILE, audio_devices, cameras, save_settings
@@ -49,6 +51,30 @@ SETTINGS = (
     SettingSpec("REMARK_AFTER_SECONDS", "Unprompted remark after this much silence (seconds, 0 = never)", "Conversation", "number", default="0"),
     SettingSpec("BARGE_IN", "Let people interrupt by talking over it", "Conversation", "bool", default="true"),
     SettingSpec("SILENCE_SECONDS", "Pause that ends your turn (seconds)", "Conversation", "number", default="0.8"),
+    SettingSpec("OBSERVE_SECONDS", "Look at what they're doing every (seconds, 0 = never)", "Watching", "number", default="0",
+                help="Each look sends one picture, made of several frames, to the model. At 30 s with Haiku 5.5 that's about a cent an hour."),
+    SettingSpec("OBSERVE_FRAMES", "Frames per look", "Watching", "number", default="9",
+                help="Spread over the interval and combined into one picture, so it sees actions instead of a pose. More frames show motion better."),
+    SettingSpec("OBSERVE_CHANGE", "Change needed before it asks again (0-255)", "Watching", "number", default="6",
+                help="If the picture changed less than this since the last look, it assumes you're still doing the same thing and skips the model. Lower asks more often."),
+    SettingSpec("OBSERVE_MODEL", "Model for watching", "Watching", default="",
+                help="Empty uses the conversation model. A cheaper vision model is fine for this."),
+    SettingSpec("RECOMMEND_EVERY_SECONDS", "At most one recommendation every (seconds, 0 = never)", "Watching", "number", default="300"),
+    SettingSpec("RECOMMEND_LONG_MINUTES", "Doing one thing this long earns another recommendation (minutes)", "Watching", "number", default="20"),
+    SettingSpec("RECOMMEND_ABOUT", "What to recommend", "Watching", default=RECOMMEND_ABOUT,
+                help="Free text, like: only games and music."),
+    SettingSpec("MEMORY", "Remember people, conversations and habits", "Memory", "bool", default="true",
+                help="Everything said and seen goes into a journal that it regularly thinks over into lasting memories."),
+    SettingSpec("MEMORY_REFLECT_MINUTES", "Think over what it saw every (minutes)", "Memory", "number", default="30",
+                help="Conversations are thought over a minute after they end; observed activities wait this long, to spot habits."),
+    SettingSpec("MEMORY_IN_PROMPT", "Memories it keeps in mind per person", "Memory", "number", default="40",
+                help="The most recently updated ones go into every reply."),
+    SettingSpec("MEMORY_KEEP_DAYS", "Keep the raw journal for (days)", "Memory", "number", default="30",
+                help="The memories themselves stay until you delete them."),
+    SettingSpec("RECOGNIZE_PEOPLE", "Tell people apart by their face", "Memory", "bool", default="true",
+                help="Faces are stored as numbers in robot.db, never as pictures. Off: everyone counts as the same person."),
+    SettingSpec("FACE_MATCH", "How alike two faces must be to count as one person (0-1)", "Memory", "number", default="0.4",
+                help="Raise it if it mixes people up, lower it if it keeps meeting you for the first time."),
     SettingSpec("TTS_ENGINE", "Voice engine", "Voice", "choice", live=False, choices=("kokoro", "piper"), default="kokoro"),
     SettingSpec("TTS_VOICE", "Default voice", "Voice", "voice", help="For personalities that don't pick their own."),
     SettingSpec("TTS_SPEED", "Default speed", "Voice", "number", default="1.0"),
@@ -68,6 +94,20 @@ SETTINGS = (
                 help="0.0.0.0 opens it to your whole network, API key included. Only do that on a network you trust."),
 )
 SPECS = {spec.key: spec for spec in SETTINGS}
+# Watching settings that map straight onto the observer: (attribute, how to read the value).
+OBSERVER_SETTINGS = {
+    "OBSERVE_SECONDS": ("every_seconds", float),
+    "OBSERVE_FRAMES": ("frames", lambda value: max(1, min(16, int(float(value))))),
+    "OBSERVE_CHANGE": ("change_threshold", float),
+    "RECOMMEND_EVERY_SECONDS": ("recommend_every_seconds", float),
+    "RECOMMEND_LONG_MINUTES": ("long_activity_minutes", float),
+}
+MEMORY_SETTINGS = {
+    "MEMORY": ("enabled", lambda value: _flag(value)),
+    "MEMORY_REFLECT_MINUTES": ("reflect_minutes", float),
+    "MEMORY_IN_PROMPT": ("in_prompt", lambda value: max(0, int(float(value)))),
+    "MEMORY_KEEP_DAYS": ("keep_days", float),
+}
 
 
 def starter_personalities(settings: Settings) -> list[Personality]:
@@ -87,7 +127,19 @@ def _flag(value: str) -> bool:
 
 class Controller:
     def __init__(
-        self, settings: Settings, store: Store, brain, voice, reflexes, conversation, engine, camera=None, monitor=None
+        self,
+        settings: Settings,
+        store: Store,
+        brain,
+        voice,
+        reflexes,
+        conversation,
+        engine,
+        camera=None,
+        monitor=None,
+        observer=None,
+        people=None,
+        memory=None,
     ) -> None:
         self.store = store
         self.brain = brain
@@ -97,8 +149,13 @@ class Controller:
         self.engine = engine
         self.camera = camera
         self.monitor = monitor
+        self.observer = observer
+        self.people = people
+        self.memory = memory
         self.save_recordings = settings.save_recordings
         self.restart_needed: set[str] = set()
+        self.on_restart: Callable[[], None] | None = None  # set by the launcher
+        self.started = time.time()
         self._default_voice = settings.tts_voice
         self._default_speed = settings.tts_speed
         self._events: deque[dict] = deque(maxlen=300)
@@ -107,6 +164,16 @@ class Controller:
         self._models: list[str] | None = None
         conversation.log = self.log
         conversation.on_new_expression = self.learn_expression
+        conversation.on_name = self.learn_name
+        if memory is not None:
+            memory.log = self.log
+            conversation.on_exchange = memory.record_exchange
+        if observer is not None:
+            observer.log = self.log
+            if memory is not None:
+                observer.on_activity = memory.record_activity
+        if people is not None:
+            people.on_new_person = lambda person: self.log("info", f"(met someone new: {people.label(person)})")
 
     # --- What's going on ---
 
@@ -127,6 +194,13 @@ class Controller:
             "model": self.brain.model,
             "muted": self.engine.muted,
             "restart_needed": sorted(self.restart_needed),
+            "started": self.started,
+            # What it has seen them doing; None without a camera, so the page can say why it's empty.
+            "watching": None if self.observer is None else bool(self.observer.every_seconds),
+            "seen": self.observer.timeline() if self.observer else [],
+            "paused": self.conversation.paused,
+            "present": [{"id": p, "label": self.people.label(p)} for p in self.people.present()] if self.people else [],
+            "recognizing": self.people is not None and self.people.enabled,
             "events": events,
         }
 
@@ -149,6 +223,75 @@ class Controller:
 
     def set_muted(self, muted: bool) -> None:
         self.engine.muted = muted
+
+    def set_paused(self, paused: bool) -> None:
+        """Pause: it sleeps, stops listening, answering and watching, and stops talking right away."""
+        self.conversation.pause(paused)
+        if self.observer is not None:
+            self.observer.paused = paused
+        if paused:
+            self.engine.stop_playback(interrupted=True)
+        self.log("info", "Paused." if paused else "Awake again.")
+
+    # --- People and memory ---
+
+    def learn_name(self, name: str) -> None:
+        """Someone told it their name (the [name=...] cue): tag the face in front of it with that name."""
+        person = self.people.closest() if self.people else None
+        if person is not None:
+            self.store.rename_person(person, name)
+            self.log("info", f"Now knows {name} by face.")
+        elif self.memory is not None:
+            self.store.add_memory(None, "fact", f"Their name is {name}.", "llm", time.time())
+            self.log("info", f"Learned a name: {name}")
+
+    def people_list(self) -> list[dict]:
+        present = set(self.people.present()) if self.people else set()
+        return [{**p, "present": p["id"] in present} for p in self.store.people()]
+
+    def rename_person(self, person_id: int, name: str) -> None:
+        if self.store.person(person_id) is None:
+            raise ValueError("That person doesn't exist any more.")
+        self.store.rename_person(person_id, name)
+
+    def delete_person(self, person_id: int) -> None:
+        self.store.delete_person(person_id)
+        if self.people is not None:
+            self.people.forget(person_id)
+
+    def merge_people(self, source: int, target: int) -> None:
+        if source == target or self.store.person(source) is None or self.store.person(target) is None:
+            raise ValueError("Pick two different people to merge.")
+        self.store.merge_people(source, target)
+        if self.people is not None:
+            self.people.reload()
+
+    def memories(self, person_id: int | None) -> list[dict]:
+        return self.store.memories(person_id)
+
+    def save_memory(self, data: dict, memory_id: int | None = None) -> None:
+        text, kind = str(data.get("text", "")).strip(), data.get("kind") or "fact"
+        if not text:
+            raise ValueError("A memory needs some text.")
+        if memory_id is None:
+            self.store.add_memory(data.get("person_id"), kind, text, "user", time.time())
+        else:
+            self.store.update_memory(memory_id, text, time.time(), kind, source="user")  # yours now: it won't change it
+
+    def delete_memory(self, memory_id: int) -> None:
+        self.store.delete_memory(memory_id)
+
+    def reflect_now(self) -> None:
+        if self.memory is None:
+            raise ValueError("Memory isn't running.")
+        threading.Thread(target=self.memory.reflect, daemon=True).start()
+
+    def restart(self) -> None:
+        """Start the robot afresh: re-reads .env and reopens every device. Back in a few seconds."""
+        if self.on_restart is None:
+            raise ValueError("Restarting only works when the robot was started with python -m robot_head.")
+        self.log("info", "Restarting...")
+        threading.Timer(0.3, self.on_restart).start()  # let the page get its answer first
 
     # --- Personalities ---
 
@@ -343,6 +486,24 @@ class Controller:
             case "CAMERA_FLIP":
                 if self.camera is not None:
                     self.camera.flip = _flag(value)
+            case "OBSERVE_MODEL":
+                self.brain.observe_model = value
+            case "RECOMMEND_ABOUT":
+                self.brain.recommend_about = value
+            case "OBSERVE_SECONDS" | "OBSERVE_FRAMES" | "OBSERVE_CHANGE" | "RECOMMEND_EVERY_SECONDS" | "RECOMMEND_LONG_MINUTES":
+                if self.observer is not None:
+                    attribute, convert = OBSERVER_SETTINGS[key]
+                    setattr(self.observer, attribute, convert(value))
+            case "MEMORY" | "MEMORY_REFLECT_MINUTES" | "MEMORY_IN_PROMPT" | "MEMORY_KEEP_DAYS":
+                if self.memory is not None:
+                    attribute, convert = MEMORY_SETTINGS[key]
+                    setattr(self.memory, attribute, convert(value))
+            case "RECOGNIZE_PEOPLE":
+                if self.people is not None:
+                    self.people.enabled = _flag(value)
+            case "FACE_MATCH":
+                if self.people is not None:
+                    self.people.match = float(value)
 
     def models(self) -> list[str]:
         """OpenRouter models that accept images, for the model field's suggestions (fetched once)."""

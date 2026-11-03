@@ -7,6 +7,8 @@ import threading
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
+import numpy as np
+
 from .expressions import PRESETS, Expression
 
 SCHEMA = """
@@ -28,6 +30,34 @@ create table if not exists expressions (
     source text not null
 );
 create table if not exists state (key text primary key, value text not null);
+create table if not exists people (
+    id integer primary key,
+    name text not null default '',
+    first_seen real not null,
+    last_seen real not null
+);
+create table if not exists faces (
+    id integer primary key,
+    person_id integer not null,
+    embedding blob not null
+);
+create table if not exists memories (
+    id integer primary key,
+    person_id integer,
+    kind text not null,
+    text text not null,
+    created real not null,
+    updated real not null,
+    source text not null
+);
+create table if not exists journal (
+    id integer primary key,
+    person_id integer,
+    time real not null,
+    kind text not null,
+    text text not null,
+    reflected integer not null default 0
+);
 """
 
 
@@ -121,6 +151,123 @@ class Store:
     def delete_expression(self, name: str) -> None:
         with self._lock, self._db:
             self._db.execute("delete from expressions where name = ?", (name,))
+
+
+    # --- People and their faces ---
+    # A face is stored as its 128-number fingerprint from the recognizer, never as a picture.
+
+    def add_person(self, now: float) -> int:
+        with self._lock, self._db:
+            return self._db.execute("insert into people (first_seen, last_seen) values (?, ?)", (now, now)).lastrowid
+
+    def people(self) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute(
+                "select p.*, (select count(*) from memories m where m.person_id = p.id) as memories,"
+                " (select count(*) from faces f where f.person_id = p.id) as faces"
+                " from people p order by p.last_seen desc"
+            ).fetchall()
+        return [{**dict(row), "label": person_label(row["id"], row["name"])} for row in rows]
+
+    def person(self, person_id: int) -> dict | None:
+        with self._lock:
+            row = self._db.execute("select * from people where id = ?", (person_id,)).fetchone()
+        return {**dict(row), "label": person_label(row["id"], row["name"])} if row else None
+
+    def rename_person(self, person_id: int, name: str) -> None:
+        with self._lock, self._db:
+            self._db.execute("update people set name = ? where id = ?", (name.strip(), person_id))
+
+    def saw_person(self, person_id: int, now: float) -> None:
+        with self._lock, self._db:
+            self._db.execute("update people set last_seen = ? where id = ?", (now, person_id))
+
+    def delete_person(self, person_id: int) -> None:
+        """Forget someone completely: their face, memories and journal."""
+        with self._lock, self._db:
+            for table in ("faces", "memories", "journal"):
+                self._db.execute(f"delete from {table} where person_id = ?", (person_id,))
+            self._db.execute("delete from people where id = ?", (person_id,))
+
+    def merge_people(self, source: int, target: int) -> None:
+        """They turned out to be the same person: move everything over to ``target``."""
+        with self._lock, self._db:
+            for table in ("faces", "memories", "journal"):
+                self._db.execute(f"update {table} set person_id = ? where person_id = ?", (target, source))
+            self._db.execute(
+                "update people set first_seen = min(first_seen, (select first_seen from people where id = ?)),"
+                " last_seen = max(last_seen, (select last_seen from people where id = ?)) where id = ?",
+                (source, source, target),
+            )
+            self._db.execute("delete from people where id = ?", (source,))
+
+    def add_face(self, person_id: int, embedding: np.ndarray) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "insert into faces (person_id, embedding) values (?, ?)",
+                (person_id, embedding.astype(np.float32).tobytes()),
+            )
+
+    def faces(self) -> list[tuple[int, np.ndarray]]:
+        with self._lock:
+            rows = self._db.execute("select person_id, embedding from faces").fetchall()
+        return [(row[0], np.frombuffer(row[1], dtype=np.float32)) for row in rows]
+
+    # --- Memories: what it keeps about someone (or about nobody in particular, with no person) ---
+
+    def memories(self, person_id: int | None) -> list[dict]:
+        where = "person_id is null" if person_id is None else "person_id = ?"
+        with self._lock:
+            rows = self._db.execute(
+                f"select * from memories where {where} order by updated desc", () if person_id is None else (person_id,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_memory(self, person_id: int | None, kind: str, text: str, source: str, now: float) -> int:
+        with self._lock, self._db:
+            return self._db.execute(
+                "insert into memories (person_id, kind, text, created, updated, source) values (?, ?, ?, ?, ?, ?)",
+                (person_id, kind, text.strip(), now, now, source),
+            ).lastrowid
+
+    def update_memory(
+        self, memory_id: int, text: str, now: float, kind: str | None = None, source: str | None = None
+    ) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "update memories set text = ?, kind = coalesce(?, kind), source = coalesce(?, source), updated = ?"
+                " where id = ?",
+                (text.strip(), kind, source, now, memory_id),
+            )
+
+    def delete_memory(self, memory_id: int) -> None:
+        with self._lock, self._db:
+            self._db.execute("delete from memories where id = ?", (memory_id,))
+
+    # --- Journal: the raw record of what was said and seen, which reflection turns into memories ---
+
+    def write_journal(self, person_id: int | None, kind: str, text: str, now: float) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "insert into journal (person_id, time, kind, text) values (?, ?, ?, ?)", (person_id, now, kind, text)
+            )
+
+    def unreflected(self) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute("select * from journal where reflected = 0 order by time").fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_reflected(self, journal_ids: list[int]) -> None:
+        with self._lock, self._db:
+            self._db.executemany("update journal set reflected = 1 where id = ?", [(i,) for i in journal_ids])
+
+    def prune_journal(self, before: float) -> None:
+        with self._lock, self._db:
+            self._db.execute("delete from journal where time < ? and reflected = 1", (before,))
+
+
+def person_label(person_id: int, name: str) -> str:
+    return name or f"Person {person_id}"
 
 
 def _expression_row(expression: Expression) -> tuple:

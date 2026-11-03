@@ -28,14 +28,16 @@ class Segment:
     cues: list[str] = field(default_factory=list)
     # Expressions invented in this sentence: name -> settings, from cues like [name lids=0.3].
     new_expressions: dict[str, dict[str, str]] = field(default_factory=dict)
+    learned_name: str | None = None  # from [name=Sebastian]: the person told it their name
 
 
 def parse_cue(content: str) -> tuple[str, dict[str, str]]:
-    """Split "disgusted lids=0.3 look=0, -0.2" into a name and its settings; plain cues have none."""
-    content = re.sub(r"\s*=\s*", "=", re.sub(r",\s+", ",", content.strip().lower()))
+    """Split "disgusted lids=0.3 look=0, -0.2" into a name and its settings; plain cues have none.
+    Names and keys are lowercased; values keep their case (for [name=Sebastian])."""
+    content = re.sub(r"\s*=\s*", "=", re.sub(r",\s+", ",", content.strip()))
     words = content.split()
-    settings = dict(word.split("=", 1) for word in words if "=" in word)
-    return "_".join(word for word in words if "=" not in word), settings
+    settings = {key.lower(): value for key, value in (word.split("=", 1) for word in words if "=" in word)}
+    return "_".join(word.lower() for word in words if "=" not in word), settings
 
 
 def parse_segment(raw: str) -> Segment:
@@ -43,6 +45,9 @@ def parse_segment(raw: str) -> Segment:
     segment = Segment("")
     for match in _CUE.finditer(raw):
         name, settings = parse_cue(match.group(1))
+        if not name and settings.get("name"):
+            segment.learned_name = settings["name"].replace("_", " ").strip()
+            continue
         if not name:
             continue
         if settings:

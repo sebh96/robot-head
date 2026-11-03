@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 from openai import OpenAI
 
@@ -38,6 +38,25 @@ Settings: lids {lids} (shut to wide open), tilt {tilt} (chin down to chin up), r
 or right), look x,y each {look} (where your eyes drift). Leave out the ones that should stay neutral.
 """
 
+SEEN = """
+What the camera has shown you the person doing lately, oldest first. Use it when it's relevant:
+{timeline}
+"""
+
+OBSERVE = """\
+These are {count} camera frames taken a few seconds apart, numbered in reading order.
+In one short sentence (under 20 words), say what the person in front of the camera is doing,
+including what they are holding, using, eating or looking at. Describe the action, not their looks.
+Earlier you saw: "{previous}". If that is still what they are doing, answer with exactly: SAME
+If nobody is there, answer with exactly: NOBODY"""
+
+RECOMMEND = """\
+(You have been watching what they do:
+{timeline}
+Give them one short, specific recommendation that fits what they are doing right now: {about}.
+Say it in character, without being asked.)"""
+RECOMMEND_ABOUT = "something to try, play, watch, listen to, eat, fix or change"
+
 
 def _cue_list(names) -> str:
     return " ".join(f"[{name}]" for name in names)
@@ -64,6 +83,10 @@ class Brain:
         self._expressions = expressions or [expression.name for expression in PRESETS]
         self._history: list[dict] = []
         self._max_messages = max_turns * 2
+        self.seen: Callable[[], str] | None = None  # the observer's timeline, when the camera watches
+        self.remembered: Callable[[], str] | None = None  # who is there and what it remembers about them
+        self.observe_model = ""  # a separate model for watching; empty uses the conversation's
+        self.recommend_about = RECOMMEND_ABOUT  # what kind of things to recommend
         self.set_api_key(api_key)
 
     def set_api_key(self, api_key: str) -> None:
@@ -88,7 +111,39 @@ class Brain:
             roll=_span("roll"),
             look=_span("look_x"),
         )
-        return f"{self._personality}\n\n{rules}"
+        timeline = self.seen() if self.seen else ""
+        remembered = self.remembered() if self.remembered else ""
+        return (
+            f"{self._personality}\n\n{rules}"
+            + (SEEN.format(timeline=timeline) if timeline else "")
+            + (f"\n{remembered}\n" if remembered else "")
+        )
+
+    def ask_json(self, prompt: str) -> str:
+        """A one-off question whose answer must be a JSON object (used to think over memories)."""
+        response = self._client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=MAX_TOKENS,
+            response_format={"type": "json_object"},
+            extra_body={"reasoning": {"effort": self.reasoning_effort}} if self.reasoning_effort else None,
+        )
+        return response.choices[0].message.content or "{}"
+
+    def observe(self, picture_jpeg: bytes, count: int, previous: str) -> str:
+        """One short line on what the person is doing in a picture of several frames (or SAME / NOBODY)."""
+        url = "data:image/jpeg;base64," + base64.b64encode(picture_jpeg).decode("ascii")
+        prompt = OBSERVE.format(count=count, previous=previous)
+        response = self._client.chat.completions.create(
+            model=self.observe_model or self.model,
+            messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}, {"type": "text", "text": prompt}]}],
+            max_tokens=MAX_TOKENS,
+            extra_body={"reasoning": {"effort": self.reasoning_effort}} if self.reasoning_effort else None,
+        )
+        return (response.choices[0].message.content or "").strip()
+
+    def recommendation_prompt(self, timeline: str) -> str:
+        return RECOMMEND.format(timeline=timeline, about=self.recommend_about or RECOMMEND_ABOUT)
 
     def reply(self, text: str, image_jpeg: bytes | None = None) -> Iterator[str]:
         """Stream the reply to what the user said, as raw text chunks with cues still in them."""

@@ -13,9 +13,10 @@ BLOCK = FRAME * FRAMES_PER_BLOCK
 
 class FakeBrain:
     def __init__(self, chunks, fail_after=None):
-        self.chunks, self.fail_after, self.closed = chunks, fail_after, False
+        self.chunks, self.fail_after, self.closed, self.prompts = chunks, fail_after, False, []
 
     def reply(self, text, image=None):
+        self.prompts.append(text)
         try:
             for i, chunk in enumerate(self.chunks):
                 if i == self.fail_after:

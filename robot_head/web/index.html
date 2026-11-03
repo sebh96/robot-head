@@ -24,7 +24,10 @@
   nav button:hover { color: var(--text); }
   nav button.active { background: var(--panel-2); border-color: var(--border); color: var(--text); }
   .switch { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 13px; cursor: pointer; }
-  #restart-banner { padding: 8px 20px; background: #3a2f17; color: var(--warn); font-size: 14px; }
+  #restart-banner { display: flex; align-items: center; gap: 12px; padding: 8px 20px; background: #3a2f17; color: var(--warn); font-size: 14px; }
+  #restart-banner[hidden] { display: none; }
+  button.btn.compact { padding: 4px 11px; font-size: 13px; }
+  button.btn[data-armed] { border-color: var(--warn); color: var(--warn); }
   main { max-width: 1280px; margin: 0 auto; padding: 20px; }
   .tab { display: none; }
   .tab.active { display: block; }
@@ -53,6 +56,31 @@
   .event.robot { align-self: flex-start; }
   .event.ignored, .event.info { align-self: center; background: none; color: var(--dim); font-size: 13px; }
   .event.error { align-self: center; background: #3a1f1f; color: #f2a5a3; font-size: 13px; }
+
+  /* What it has seen */
+  .seen { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .seen li { display: grid; grid-template-columns: 92px 1fr; gap: 10px; font-size: 14px; }
+  .seen time { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .seen li:first-child span { color: var(--text); font-weight: 600; }
+  .seen .empty { display: block; color: var(--dim); }
+
+  /* Memory */
+  .memories { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .memories li { display: grid; grid-template-columns: 100px 1fr auto auto; gap: 8px; align-items: center; }
+  .memories input { padding: 6px 8px; }
+  .memories .badge { justify-self: start; }
+  .memories time { color: var(--dim); font-size: 12px; white-space: nowrap; }
+  .memories .empty { display: block; color: var(--dim); }
+  .badge.fact { background: #22324a; color: #9cc3ff; }
+  .badge.preference { background: #3a2a3f; color: #e3a6ff; }
+  .badge.habit { background: #2f3a22; color: #b9e38c; }
+  .badge.plan { background: #3a3222; color: #f0c674; }
+  .badge.conversation { background: #2a2f36; color: #b8c0cc; }
+  .person-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 4px; }
+  .person-meta input { max-width: 240px; }
+  .person-meta select { max-width: 200px; }
+  button.btn.paused { border-color: var(--warn); color: var(--warn); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 6px; }
 
   /* Controls */
   .row { display: flex; gap: 8px; align-items: center; }
@@ -128,16 +156,21 @@
   <span class="pill" id="pill-personality">Playing <b id="st-personality">…</b></span>
   <span class="pill" id="pill-mode">Mode <b id="st-mode">…</b></span>
   <span class="pill">Face <b id="st-expression">…</b></span>
+  <span class="pill" id="pill-with" hidden>With <b id="st-with">…</b></span>
   <label class="switch"><input type="checkbox" id="mute"> Mute voice</label>
+  <button class="btn compact" id="pause" title="Sleep: stop listening, answering, watching and talking until you resume">Pause</button>
+  <button class="btn compact" id="restart" data-label="Restart" title="Start the robot afresh: re-reads the settings and reopens every device">Restart</button>
   <nav>
     <button data-tab="live" class="active">Live</button>
     <button data-tab="wiring">Wiring</button>
     <button data-tab="personalities">Personalities</button>
     <button data-tab="expressions">Expressions</button>
+    <button data-tab="memory">Memory</button>
     <button data-tab="settings">Settings</button>
   </nav>
 </header>
-<div id="restart-banner" hidden>Restart the robot to apply: <span id="restart-keys"></span></div>
+<div id="restart-banner" hidden>Restart the robot to apply: <span id="restart-keys"></span>
+  <button class="btn compact" id="restart-now" data-label="Restart now">Restart now</button></div>
 
 <main>
   <section id="live" class="tab active">
@@ -157,13 +190,19 @@
           <h3>Look</h3><div id="puppet-gazes" class="chips"></div>
         </div>
       </div>
-      <div class="card">
-        <h2>Conversation</h2>
-        <div id="log" class="log"></div>
-        <form id="say-form" class="row">
-          <input id="say" placeholder="Type something to say to him…" autocomplete="off">
-          <button class="btn primary">Send</button>
-        </form>
+      <div class="stack">
+        <div class="card">
+          <h2>Conversation</h2>
+          <div id="log" class="log"></div>
+          <form id="say-form" class="row">
+            <input id="say" placeholder="Type something to say to him…" autocomplete="off">
+            <button class="btn primary">Send</button>
+          </form>
+        </div>
+        <div class="card">
+          <h2>Seen lately</h2>
+          <ul id="seen" class="seen"></ul>
+        </div>
       </div>
     </div>
   </section>
@@ -222,10 +261,36 @@
     <div id="faces" class="faces"></div>
   </section>
 
+  <section id="memory" class="tab">
+    <div class="split">
+      <div class="card">
+        <div class="head"><h2>People</h2><button class="btn compact" id="reflect" title="Turn everything since the last time into memories now">Think it over</button></div>
+        <ul id="people-list" class="list"></ul>
+        <p class="dim small">He tells people apart by face and learns names when you tell him. Faces are kept as numbers, never as pictures.</p>
+      </div>
+      <div class="card">
+        <div id="person-head"></div>
+        <h3>Memories</h3>
+        <ul id="memory-list" class="memories"></ul>
+        <form id="memory-form" class="row" style="margin-top: 12px">
+          <select name="kind" style="width: 150px">
+            <option>fact</option><option>preference</option><option>habit</option><option>plan</option><option>conversation</option>
+          </select>
+          <input name="text" placeholder="Something he should remember" required>
+          <button class="btn">Add</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
   <section id="settings" class="tab">
     <form id="settings-form">
       <div id="setting-groups"></div>
-      <div class="save-bar row end"><span id="settings-note" class="dim small"></span><button class="btn primary">Save settings</button></div>
+      <div class="save-bar row end">
+        <span id="settings-note" class="dim small"></span>
+        <button class="btn">Save settings</button>
+        <button type="button" class="btn primary" id="save-restart" title="Save, then restart so every setting applies, including the ones marked restart">Save and restart</button>
+      </div>
     </form>
   </section>
 </main>
@@ -265,7 +330,8 @@ const failed = error => toast(error.message, true);
 
 // --- Tabs ---
 const loaders = {
-  live: loadLive, wiring: loadWiring, personalities: loadPersonalities, expressions: loadExpressions, settings: loadSettings,
+  live: loadLive, wiring: loadWiring, personalities: loadPersonalities, expressions: loadExpressions,
+  memory: loadMemory, settings: loadSettings,
 };
 let activeTab = "live";
 function showTab(name) {
@@ -359,11 +425,43 @@ function draw() {
   if (activeTab === "wiring") updateWiring(frame.servos);
 }
 
+// --- Restart ---
+let startedAt = null;
+async function restartRobot(button) {
+  if (!button.dataset.armed) {  // a second click within 3 s confirms
+    button.dataset.armed = "1";
+    button.textContent = "Click again to restart";
+    setTimeout(() => { delete button.dataset.armed; if (!button.disabled) button.textContent = button.dataset.label; }, 3000);
+    return;
+  }
+  try {
+    await api("POST", "/api/restart");
+    button.disabled = true;
+    button.textContent = "Restarting…";
+    toast("Restarting. Back in a few seconds.");
+  } catch (error) { failed(error); }
+}
+$("#restart").onclick = () => restartRobot($("#restart"));
+
+// --- Pause ---
+let paused = false;
+$("#pause").onclick = async () => {
+  try {
+    await api("POST", "/api/pause", {value: !paused});
+    paused = !paused;
+    $("#pause").textContent = paused ? "Resume" : "Pause";
+    $("#pause").classList.toggle("paused", paused);
+  } catch (error) { failed(error); }
+};
+$("#restart-now").onclick = () => restartRobot($("#restart-now"));
+
 // --- Events, status, conversation ---
 let lastEvent = 0, currentExpression = "";
 async function poll() {
   try {
     const state = await api("GET", `/api/state?after=${lastEvent}`);
+    if (startedAt !== null && state.started !== startedAt) { location.reload(); return; }  // it restarted
+    startedAt = state.started;
     $("#pill-mode").classList.remove("offline");
     $("#st-personality").textContent = state.personality.name;
     $("#mute").checked = state.muted;
@@ -371,6 +469,12 @@ async function poll() {
     const shown = [...document.querySelectorAll("#puppet-expressions .chip")].map(c => c.dataset.name);
     if (meta && shown.join() !== state.expressions.join()) chips($("#puppet-expressions"), state.expressions);  // he learned one
     document.querySelectorAll("#puppet-expressions .chip").forEach(c => c.classList.toggle("current", c.dataset.name === currentExpression));
+    renderSeen(state);
+    paused = state.paused;
+    $("#pause").textContent = paused ? "Resume" : "Pause";
+    $("#pause").classList.toggle("paused", paused);
+    $("#pill-with").hidden = !state.recognizing;
+    $("#st-with").textContent = state.present.map(p => p.label).join(", ") || "nobody";
     $("#restart-banner").hidden = !state.restart_needed.length;
     $("#restart-keys").textContent = state.restart_needed.join(", ");
     const log = $("#log");
@@ -386,6 +490,19 @@ async function poll() {
     $("#st-mode").textContent = "offline";
   }
   setTimeout(poll, 1000);
+}
+
+function renderSeen(state) {
+  const list = $("#seen");
+  const empty = text => list.replaceChildren(el("li", {className: "empty", textContent: text}));
+  if (state.watching === null) return empty("Watching needs the camera.");
+  if (!state.watching) return empty("Watching is off. Turn it on under Settings → Watching.");
+  if (!state.seen.length) return empty("Nothing yet. It looks every few seconds while someone is in view.");
+  list.replaceChildren(...[...state.seen].reverse().map(a => {
+    const start = new Date(a.start * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+    return el("li", {}, el("time", {textContent: a.minutes ? `${start} · ${a.minutes} min` : start}),
+      el("span", {textContent: a.description}));
+  }));
 }
 
 $("#say-form").onsubmit = async event => {
@@ -721,6 +838,89 @@ $("#new-expression").onsubmit = async event => {
   } catch (error) { failed(error); }
 };
 
+// --- Memory ---
+let people = [], person = "general";  // "general": memories about nobody in particular
+const when = seconds => new Date(seconds * 1000).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"});
+
+async function loadMemory() {
+  people = await api("GET", "/api/people");
+  if (person !== "general" && !people.some(p => p.id === person)) person = "general";
+  renderPeople();
+  await renderMemories();
+}
+
+function renderPeople() {
+  const entries = [{id: "general", label: "Nobody in particular", memories: null, present: false}, ...people];
+  $("#people-list").replaceChildren(...entries.map(p => {
+    const name = el("span", {}, ...(p.present ? [el("span", {className: "dot", title: "In view now"})] : []), p.label);
+    const item = el("li", {className: p.id === person ? "selected" : ""}, name);
+    if (p.memories !== null) item.append(el("span", {className: "badge", textContent: `${p.memories}`}));
+    item.onclick = () => { person = p.id; renderPeople(); renderMemories().catch(failed); };
+    return item;
+  }));
+}
+
+async function renderMemories() {
+  const head = $("#person-head");
+  const p = people.find(p => p.id === person);
+  if (!p) {
+    head.replaceChildren(el("h2", {textContent: "Nobody in particular"}),
+      el("p", {className: "dim small", textContent: "Memories not tied to a face. Without face recognition, everything he remembers lands here."}));
+  } else {
+    const name = el("input", {value: p.name, placeholder: p.label});
+    const saveName = el("button", {className: "btn compact", type: "button", textContent: "Save name"});
+    saveName.onclick = async () => {
+      try { await api("PUT", `/api/people/${p.id}`, {name: name.value}); toast("Saved."); await loadMemory(); } catch (error) { failed(error); }
+    };
+    const others = people.filter(o => o.id !== p.id);
+    const target = el("select", {}, el("option", {value: "", textContent: "Same person as…"}), ...others.map(o => el("option", {value: o.id, textContent: o.label})));
+    const merge = el("button", {className: "btn compact", type: "button", textContent: "Merge", disabled: !others.length});
+    merge.onclick = async () => {
+      if (!target.value) return toast("Pick who this really is.", true);
+      const into = people.find(o => o.id === Number(target.value));
+      if (!confirm(`Merge ${p.label} into ${into.label}? Faces and memories move over.`)) return;
+      try { await api("POST", `/api/people/${p.id}/merge`, {into: into.id}); person = into.id; await loadMemory(); toast("Merged."); } catch (error) { failed(error); }
+    };
+    const forget = el("button", {className: "btn compact danger", type: "button", textContent: "Forget completely"});
+    forget.onclick = async () => {
+      if (!confirm(`Forget ${p.label}: face, memories and journal?`)) return;
+      try { await api("DELETE", `/api/people/${p.id}`); person = "general"; await loadMemory(); toast("Forgotten."); } catch (error) { failed(error); }
+    };
+    head.replaceChildren(
+      el("div", {className: "person-meta"}, name, saveName, target, merge, forget),
+      el("p", {className: "dim small", textContent:
+        `${p.present ? "In view now. " : ""}First met ${when(p.first_seen)}, last seen ${when(p.last_seen)}, ${p.faces} face sample${p.faces === 1 ? "" : "s"}.`}));
+  }
+  const memories = await api("GET", "/api/memories" + (p ? `?person=${p.id}` : ""));
+  const list = $("#memory-list");
+  if (!memories.length) return list.replaceChildren(el("li", {className: "empty", textContent: "Nothing yet. He thinks conversations over a minute after they end."}));
+  list.replaceChildren(...memories.map(m => {
+    const text = el("input", {value: m.text, title: m.source === "user" ? "Written or edited by you: he won't change it" : "Written by him"});
+    text.onchange = async () => {
+      try { await api("PUT", `/api/memories/${m.id}`, {text: text.value, kind: m.kind}); toast("Saved. He won't change this one now."); } catch (error) { failed(error); }
+    };
+    const remove = el("button", {className: "btn compact danger", type: "button", textContent: "✕", title: "Forget this"});
+    remove.onclick = async () => {
+      try { await api("DELETE", `/api/memories/${m.id}`); await loadMemory(); } catch (error) { failed(error); }
+    };
+    return el("li", {}, el("span", {className: `badge ${m.kind}`, textContent: m.kind}), text, el("time", {textContent: when(m.updated)}), remove);
+  }));
+}
+
+$("#memory-form").onsubmit = async event => {
+  event.preventDefault();
+  const form = event.target;
+  try {
+    await api("POST", "/api/memories", {text: form.elements.text.value, kind: form.elements.kind.value, person_id: person === "general" ? null : person});
+    form.elements.text.value = "";
+    await loadMemory();
+  } catch (error) { failed(error); }
+};
+$("#reflect").onclick = async () => {
+  try { await api("POST", "/api/memory/reflect"); toast("Thinking it over… new memories show up in a few seconds."); setTimeout(() => loadMemory().catch(failed), 6000); }
+  catch (error) { failed(error); }
+};
+
 // --- Settings ---
 async function loadSettings() {
   const [settings, models] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/models").catch(() => [])]);
@@ -747,7 +947,7 @@ function settingRow(s) {
     if (s.kind === "number") input.inputMode = "decimal";
     if (s.kind === "secret") Object.assign(input, {type: "password", autocomplete: "off", placeholder: s.is_set ? "Saved. Type a new one to replace it" : "Not set"});
     if (s.kind === "voice") input.setAttribute("list", "voice-list");
-    if (s.key === "OPENROUTER_MODEL") input.setAttribute("list", "model-list");
+    if (["OPENROUTER_MODEL", "OBSERVE_MODEL"].includes(s.key)) input.setAttribute("list", "model-list");
   }
   input.name = s.key;
   input.dataset.initial = currentValue(input);
@@ -759,23 +959,42 @@ function settingRow(s) {
   return row;
 }
 
-$("#settings-form").onsubmit = async event => {
-  event.preventDefault();
+/** Save what changed. Returns false if something couldn't be saved. */
+async function saveSettings({quiet = false} = {}) {
   const changed = {};
-  for (const input of event.target.querySelectorAll("[name]")) {
+  for (const input of $("#settings-form").querySelectorAll("[name]")) {
     const value = currentValue(input);
     if (value !== input.dataset.initial && !(input.type === "password" && !value)) changed[input.name] = value;
   }
-  if (!Object.keys(changed).length) { toast("Nothing changed."); return; }
+  if (!Object.keys(changed).length) {
+    if (!quiet) toast("Nothing changed.");
+    return true;
+  }
   try {
     const result = await api("PUT", "/api/settings", changed);
     const parts = [];
     if (result.applied.length) parts.push(`Applied now: ${result.applied.join(", ")}.`);
     if (result.restart.length) parts.push(`After a restart: ${result.restart.join(", ")}.`);
     const errors = Object.entries(result.errors).map(([key, message]) => `${key}: ${message}`);
-    if (errors.length) toast(errors.join(" "), true); else toast(parts.join(" ") || "Saved.");
+    if (errors.length) toast(errors.join(" "), true); else if (!quiet) toast(parts.join(" ") || "Saved.");
     await loadSettings();
     $("#settings-note").textContent = parts.join(" ");
+    return !errors.length;
+  } catch (error) {
+    failed(error);
+    return false;
+  }
+}
+
+$("#settings-form").onsubmit = event => { event.preventDefault(); saveSettings(); };
+$("#save-restart").onclick = async () => {
+  const button = $("#save-restart");
+  if (!(await saveSettings({quiet: true}))) return;  // don't restart on settings that didn't save
+  try {
+    await api("POST", "/api/restart");
+    button.disabled = true;
+    button.textContent = "Restarting…";
+    toast("Saved. Restarting, back in a few seconds.");
   } catch (error) { failed(error); }
 };
 

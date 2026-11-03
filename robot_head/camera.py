@@ -67,6 +67,7 @@ class Camera:
         self._lock = threading.Lock()
         self._frame: np.ndarray | None = None
         self._face_box: tuple[int, int, int, int] | None = None
+        self._faces: list[np.ndarray] = []
         self._face_seen = 0.0
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -97,6 +98,11 @@ class Camera:
         ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
         return jpeg.tobytes() if ok else None
 
+    def latest_frame(self) -> np.ndarray | None:
+        """The newest frame (frames are replaced, never changed, so no copy is needed)."""
+        with self._lock:
+            return self._frame
+
     def snapshot_jpeg(self, max_side: int = 512) -> bytes | None:
         """The latest frame as a small JPEG for the LLM."""
         with self._lock:
@@ -122,19 +128,32 @@ class Camera:
                 continue
             if self.flip:
                 frame = cv2.flip(frame, 1)
-            box = self._detect(frame)
+            faces = self._detect(frame)
             with self._lock:
                 self._frame = frame
-                if box is not None:
-                    self._face_box = box
+                if faces:
+                    self._faces = faces
+                    self._face_box = tuple(int(v) for v in faces[0][:4])
                     self._face_seen = time.monotonic()
 
-    def _detect(self, frame: np.ndarray) -> tuple[int, int, int, int] | None:
+    def faces_sample(self) -> tuple[np.ndarray, list[np.ndarray]] | None:
+        """The newest frame and the faces in it, biggest (closest) first, for recognizing who's there.
+        Each face is YuNet's row: box, five landmarks and the detection score, in frame pixels."""
+        with self._lock:
+            if self._frame is None or not self._faces or time.monotonic() - self._face_seen > FACE_TIMEOUT:
+                return None
+            return self._frame, self._faces
+
+    def _detect(self, frame: np.ndarray) -> list[np.ndarray]:
         scale = DETECT_WIDTH / frame.shape[1]
         small = cv2.resize(frame, None, fx=scale, fy=scale)
         self._detector.setInputSize((small.shape[1], small.shape[0]))
         _, faces = self._detector.detect(small)
         if faces is None or len(faces) == 0:
-            return None
-        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])[:4]  # the biggest face is the closest person
-        return int(x / scale), int(y / scale), int(w / scale), int(h / scale)
+            return []
+        rows = []
+        for face in sorted(faces, key=lambda f: f[2] * f[3], reverse=True):  # the biggest face is the closest person
+            row = face.copy()
+            row[:14] /= scale  # box and landmarks back to full-frame pixels; the score stays
+            rows.append(row)
+        return rows
