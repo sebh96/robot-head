@@ -108,16 +108,19 @@ def main() -> None:
             sys.exit(str(error))
     store = Store(PROJECT_DIR / "robot.db")
     joints = calibrated(store.servos())
+    motors_problem = None
     if settings.motors == "pca9685":
         try:
             motors = Pca9685Motors(joints)
         except ImportError:
             sys.exit("MOTORS=pca9685 needs the Raspberry Pi extras: uv sync --extra pi")
-        except OSError as error:
-            sys.exit(
-                f"Can't reach the servo board ({error}). Is I2C on (sudo raspi-config nonint do_i2c 0), and is the "
-                "PCA9685 wired to Pi pins 1, 3, 5 and 6? `i2cdetect -y 1` should list it at 40."
+        except OSError as error:  # not wired up yet: keep going, so the rest can be tried and set up
+            motors_problem = (
+                f"Can't reach the servo board ({error}), so the servos are only simulated. Is I2C on, and is the PCA9685 "
+                "wired to Pi pins 1, 3, 5 and 6? `i2cdetect -y 1` should list it at 40. Restart once it's connected."
             )
+            print(motors_problem)
+            motors = SimulatedMotors(joints)
     else:
         motors = SimulatedMotors(joints)
     monitor = ServoMonitor(motors)
@@ -197,6 +200,8 @@ def main() -> None:
     controller = Controller(
         settings, store, brain, voice, reflexes, conversation, engine, camera, monitor, observer, people, memory
     )
+    if motors_problem:
+        controller.log("error", motors_problem)
     restart = threading.Event()
 
     def request_restart() -> None:

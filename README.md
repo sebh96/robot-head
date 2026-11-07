@@ -137,7 +137,7 @@ Open-source eye mechanisms that use small servos, such as Will Cogley's 3D-print
 
 ### Installing
 
-1. With [Raspberry Pi Imager](https://www.raspberrypi.com/software/), put **Raspberry Pi OS Lite (64-bit)** on the card. In its settings, set the hostname to `robot-head`, a user name and password, your Wi-Fi, and turn on SSH.
+1. With [Raspberry Pi Imager](https://www.raspberrypi.com/software/), put **Raspberry Pi OS Lite (64-bit)** on the card. In its settings, set the hostname to `robot-head`, a user name and password, your Wi-Fi, and turn on SSH. The desktop version works too; sound then goes through its PipeWire.
 2. Plug in the webcam and the speaker, start the Pi and log in from your PC: `ssh you@robot-head.local`
 3. Get the code and run the installer:
 

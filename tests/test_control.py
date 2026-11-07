@@ -112,3 +112,8 @@ def test_the_api_key_is_never_sent_back(robot):
     robot.update_settings({"OPENROUTER_API_KEY": "sk-or-secret"})
     key = next(s for s in robot.settings() if s["key"] == "OPENROUTER_API_KEY")
     assert (key["value"], key["is_set"]) == ("", True)
+
+
+def test_it_starts_without_an_api_key():
+    brain = Brain("", "some/model", "none", "You are Bolt.")  # the key gets pasted in the control panel later
+    brain.set_api_key("sk-or-later")

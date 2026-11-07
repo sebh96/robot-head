@@ -12,7 +12,10 @@ step() { printf '\n== %s\n' "$1"; }
 step "System packages"
 sudo apt-get update
 # PortAudio for sound, the libraries OpenCV needs, and tools for checking I2C and sound by hand.
-sudo apt-get install -y git curl i2c-tools alsa-utils libportaudio2 libsndfile1 libgl1 libglib2.0-0
+packages=(git curl i2c-tools alsa-utils libportaudio2 libsndfile1 libgl1 libglib2.0-0)
+# Desktop images run PipeWire: send plain ALSA programs, like the robot, through it too.
+if dpkg -s pipewire >/dev/null 2>&1; then packages+=(pipewire-alsa); fi
+sudo apt-get install -y "${packages[@]}"
 
 step "I2C for the servo board"
 sudo raspi-config nonint do_i2c 0  # 0 means on
@@ -50,8 +53,7 @@ if [ "$web_host" != "0.0.0.0" ]; then
 fi
 
 step "Sound"
-# The robot talks to ALSA's "default" device. Point it at a USB speaker and a USB microphone (a webcam's
-# counts), with automatic sample rate conversion, so any USB sound device works without further setup.
+# The robot talks to ALSA's "default" device.
 pick() {  # $1: aplay or arecord, $2: what it's for. Prints "card,device" or nothing.
     local options
     mapfile -t options < <("$1" -l 2>/dev/null | sed -n 's/^card [0-9]*: \([^ ]*\) \[\(.*\)\], device \([0-9]*\):.*/\1,\3 (\2)/p' | grep -v '^vc4hdmi' || true)
@@ -67,19 +69,29 @@ pick() {  # $1: aplay or arecord, $2: what it's for. Prints "card,device" or not
         done
     fi
 }
-speaker="$(pick aplay speaker)"
-microphone="$(pick arecord microphone)"
-if [ -z "$speaker" ] || [ -z "$microphone" ]; then
-    if [ -z "$speaker" ] && [ -z "$microphone" ]; then
-        missing="speaker or microphone"
-    elif [ -z "$speaker" ]; then
-        missing="speaker"
-    else
-        missing="microphone"
-    fi
-    echo "Found no USB $missing. Plug it in and run bash pi/install.sh again; skipping the sound setup for now."
+if dpkg -s pipewire-alsa >/dev/null 2>&1; then
+    # Desktop image: PipeWire owns the sound devices and converts sample rates itself, so the robot goes through it.
+    # Lingering starts PipeWire at boot even when nobody logs in.
+    sudo loginctl enable-linger "$ME"
+    if grep -q "robot-head" /etc/asound.conf 2>/dev/null; then sudo rm /etc/asound.conf; fi
+    echo "Sound goes through PipeWire. See the devices with: wpctl status"
+    echo "and pick the speaker or microphone with: wpctl set-default <number>"
 else
-    sudo tee /etc/asound.conf >/dev/null <<EOF
+    # Lite image: point ALSA straight at a USB speaker and a USB microphone (a webcam's counts), with automatic
+    # sample rate conversion, so any USB sound device works without further setup.
+    speaker="$(pick aplay speaker)"
+    microphone="$(pick arecord microphone)"
+    if [ -z "$speaker" ] || [ -z "$microphone" ]; then
+        if [ -z "$speaker" ] && [ -z "$microphone" ]; then
+            missing="speaker or microphone"
+        elif [ -z "$speaker" ]; then
+            missing="speaker"
+        else
+            missing="microphone"
+        fi
+        echo "Found no USB $missing. Plug it in and run bash pi/install.sh again; skipping the sound setup for now."
+    else
+        sudo tee /etc/asound.conf >/dev/null <<EOF
 # Written by robot-head's pi/install.sh: play on ${speaker%,*}, record from ${microphone%,*}.
 pcm.!default {
     type asym
@@ -91,20 +103,21 @@ ctl.!default {
     card ${speaker%,*}
 }
 EOF
-    # Turn the volume up and the microphone on; the controls are named differently on every device.
-    for control in PCM Speaker Master Headphone; do
-        amixer -q -c "${speaker%,*}" sset "$control" 90% unmute 2>/dev/null || true
-    done
-    for control in Mic Capture; do
-        amixer -q -c "${microphone%,*}" sset "$control" 80% cap 2>/dev/null || true
-    done
-    sudo alsactl store 2>/dev/null || true
-    echo "Speaker: ${speaker%,*}, microphone: ${microphone%,*}."
-    echo "Check them with: speaker-test -t wav -c 1 -l 1    and    arecord -d 3 test.wav && aplay test.wav"
+        # Turn the volume up and the microphone on; the controls are named differently on every device.
+        for control in PCM Speaker Master Headphone; do
+            amixer -q -c "${speaker%,*}" sset "$control" 90% unmute 2>/dev/null || true
+        done
+        for control in Mic Capture; do
+            amixer -q -c "${microphone%,*}" sset "$control" 80% cap 2>/dev/null || true
+        done
+        sudo alsactl store 2>/dev/null || true
+        echo "Speaker: ${speaker%,*}, microphone: ${microphone%,*}."
+        echo "Check them with: speaker-test -t wav -c 1 -l 1    and    arecord -d 3 test.wav && aplay test.wav"
+    fi
 fi
 
 step "Start on boot"
-sed -e "s|@USER@|$ME|g" -e "s|@DIR@|$HERE|g" -e "s|@UV@|$UV|g" pi/robot-head.service |
+sed -e "s|@USER@|$ME|g" -e "s|@UID@|$(id -u)|g" -e "s|@DIR@|$HERE|g" -e "s|@UV@|$UV|g" pi/robot-head.service |
     sudo tee /etc/systemd/system/robot-head.service >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable robot-head

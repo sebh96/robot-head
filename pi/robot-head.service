@@ -2,12 +2,14 @@
 # /etc/systemd/system/robot-head.service. Logs: journalctl -u robot-head -f
 [Unit]
 Description=robot-head, an LLM-driven animatronic head
-Wants=network-online.target
-After=network-online.target sound.target
+Wants=network-online.target user@@UID@.service
+After=network-online.target sound.target user@@UID@.service
 
 [Service]
 User=@USER@
 WorkingDirectory=@DIR@
+# On desktop images sound goes through the user's PipeWire, which lives here.
+Environment=XDG_RUNTIME_DIR=/run/user/@UID@
 ExecStart=@UV@ run --frozen --extra pi python -m robot_head
 # Ctrl+C rather than a hard stop, so the servos are let go and the devices closed properly.
 KillSignal=SIGINT

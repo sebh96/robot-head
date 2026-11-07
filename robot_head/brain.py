@@ -90,7 +90,11 @@ class Brain:
         self.set_api_key(api_key)
 
     def set_api_key(self, api_key: str) -> None:
-        self._client = OpenAI(base_url=OPENROUTER_URL, api_key=api_key, default_headers={"X-Title": "robot-head"})
+        # Without a key the client refuses to exist, but the robot must still start so the key can be pasted in the
+        # control panel; until then OpenRouter answers each call with a missing-key error.
+        self._client = OpenAI(
+            base_url=OPENROUTER_URL, api_key=api_key or "not-set", default_headers={"X-Title": "robot-head"}
+        )
 
     def set_personality(self, prompt: str) -> None:
         """Become someone else. The conversation so far belonged to the old character, so it's dropped."""
