@@ -1,3 +1,6 @@
+import base64
+
+import numpy as np
 import pytest
 
 from robot_head import config, control
@@ -117,3 +120,16 @@ def test_the_api_key_is_never_sent_back(robot):
 def test_it_starts_without_an_api_key():
     brain = Brain("", "some/model", "none", "You are Bolt.")  # the key gets pasted in the control panel later
     brain.set_api_key("sk-or-later")
+
+
+def test_its_voice_reaches_pages_set_to_play_here(robot):
+    listener = robot.sound.subscribe()
+    robot.engine.on_play(np.full(4800, 0.5, dtype=np.float32))  # a tenth of a second at 48 kHz
+    event = listener.get_nowait()
+    pcm = np.frombuffer(base64.b64decode(event["pcm"]), dtype="<i2")
+    assert event["rate"] == 24000 and len(pcm) == 2400 and abs(int(pcm[1200]) - 16383) < 300
+    robot.engine.on_stop()  # someone talked over it
+    assert listener.get_nowait() == {"stop": True}
+    robot.sound.unsubscribe(listener)
+    robot.engine.on_play(np.ones(480, dtype=np.float32))
+    assert listener.empty()

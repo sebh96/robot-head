@@ -19,6 +19,7 @@ from .cues import GAZES, GESTURES
 from .devices import ENV_FILE, audio_devices, cameras, save_settings
 from .expressions import RANGES, Expression, clamped, from_settings, valid_name
 from .motors import JOINTS, calibrated
+from .sound_feed import SoundFeed
 from .store import Personality, Store
 
 MAX_LEARNED_EXPRESSIONS = 40  # so a chatty model can't fill the database with faces
@@ -164,6 +165,9 @@ class Controller:
         self._event_id = 0
         self._lock = threading.Lock()
         self._models: list[str] | None = None
+        self.sound = SoundFeed()  # its voice for browsers set to "Play here"
+        engine.on_play = self.sound.play
+        engine.on_stop = self.sound.stop
         conversation.log = self.log
         conversation.on_new_expression = self.learn_expression
         conversation.on_name = self.learn_name

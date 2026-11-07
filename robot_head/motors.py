@@ -98,17 +98,17 @@ class Motors:
                 angle = self._held.get(name)
                 if angle is None:
                     angle = joint.to_angle(pose.get(name, joint.rest))
-                if self.angles.get(name) != angle:
-                    self._send(joint.channel, angle)
-                    self.angles[name] = angle
+                if self.angles.get(name) != angle and self._send(joint.channel, angle):
+                    self.angles[name] = angle  # only once it arrived, so a failed send is tried again
 
     def close(self) -> None:
         with self._lock:
             for joint in self.joints.values():
                 self._send(joint.channel, None)
 
-    def _send(self, channel: int, angle: float | None) -> None:
-        """Move the servo on ``channel``; None stops its pulses so it goes limp."""
+    def _send(self, channel: int, angle: float | None) -> bool:
+        """Move the servo on ``channel``; None stops its pulses so it goes limp. Returns whether it arrived."""
+        return True
 
 
 class SimulatedMotors(Motors):
@@ -118,20 +118,48 @@ class SimulatedMotors(Motors):
 class Pca9685Motors(Motors):
     """Hobby servos on a PCA9685 board over I2C (Raspberry Pi: ``uv sync --extra pi``)."""
 
+    CHECK_EVERY = 1.0  # seconds between checks that the board hasn't reset itself
+
     def __init__(self, joints: dict[str, Joint] = JOINTS, board: Pca9685 | None = None) -> None:
         self._board = board or Pca9685()
         self._failing = False
+        self._checked = time.monotonic()
+        self.resets = 0  # how often the board had to be woken up again
         super().__init__(joints)
 
-    def _send(self, channel: int, angle: float | None) -> None:
+    def write(self, pose: Pose) -> None:
+        if time.monotonic() - self._checked >= self.CHECK_EVERY:
+            self._checked = time.monotonic()
+            self._wake_if_reset()
+        super().write(pose)
+
+    def _wake_if_reset(self) -> None:
+        """A dip in its supply resets the chip, and it comes back asleep with every servo off. Start it again."""
+        try:
+            if not self._board.asleep():
+                return
+            self._board.wake()
+        except OSError:
+            return  # _send says so when the wires are the problem
+        with self._lock:
+            self.angles.clear()  # it forgot every pulse: send them all again
+        self.resets += 1
+        if self.resets == 1 or self.resets % 100 == 0:
+            print(
+                f"The servo board reset itself ({self.resets}x so far), usually because its power dipped. Woke it up "
+                "again. Check that the servos have their own supply on the V+ terminal and that the grounds are shared."
+            )
+
+    def _send(self, channel: int, angle: float | None) -> bool:
         try:
             self._board.pulse(channel, None if angle is None else pulse_width(angle))
-        except OSError as error:  # a loose wire: say so once, keep trying
+        except OSError as error:  # a loose wire or a dip in power: say so once, keep trying
             if not self._failing:
                 print(f"Can't reach the servo board: {error}. Check the wires to the PCA9685.")
             self._failing = True
-        else:
-            self._failing = False
+            return False
+        self._failing = False
+        return True
 
 
 class Pca9685:
@@ -149,11 +177,20 @@ class Pca9685:
             bus = SMBus(1)  # I2C bus 1: Pi pins 3 (SDA) and 5 (SCL)
         self._bus, self._address = bus, address
         self._period = 1_000_000 / frequency  # microseconds
+        self._prescale = round(self.OSCILLATOR / (4096 * frequency)) - 1
+        self.wake()
+
+    def wake(self) -> None:
+        """Set the pulse frequency and start the oscillator: at startup, and after the chip reset itself."""
         self._write(self.MODE1, self.SLEEP)  # the pulse frequency can only be set while asleep
-        self._write(self.PRESCALE, round(self.OSCILLATOR / (4096 * frequency)) - 1)
+        self._write(self.PRESCALE, self._prescale)
         self._write(self.MODE1, self.AUTO_INCREMENT)
         time.sleep(0.001)  # the oscillator needs half a millisecond to start
         self._write(self.MODE1, self.AUTO_INCREMENT | self.RESTART)
+
+    def asleep(self) -> bool:
+        """True after a reset: the chip starts up asleep, sending no pulses."""
+        return bool(self._bus.read_byte_data(self._address, self.MODE1) & self.SLEEP)
 
     def pulse(self, channel: int, microseconds: float | None) -> None:
         if microseconds is None:

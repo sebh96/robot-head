@@ -169,7 +169,8 @@
   <span class="pill" id="pill-mode">Mode <b id="st-mode">…</b></span>
   <span class="pill">Face <b id="st-expression">…</b></span>
   <span class="pill" id="pill-with" hidden>With <b id="st-with">…</b></span>
-  <label class="switch"><input type="checkbox" id="mute"> Mute voice</label>
+  <label class="switch" title="Silence the robot's own speaker. It still talks: here, and in pages set to Play here."><input type="checkbox" id="mute"> Mute speaker</label>
+  <label class="switch" title="Play the robot's voice on this computer or phone too"><input type="checkbox" id="play-here"> Play here</label>
   <button class="btn compact" id="pause" title="Sleep: stop listening, answering, watching and talking until you resume">Pause</button>
   <button class="btn compact" id="restart" data-label="Restart" title="Start the robot afresh: re-reads the settings and reopens every device">Restart</button>
   <nav>
@@ -538,6 +539,60 @@ $("#say-form").onsubmit = async event => {
   await api("POST", "/api/say", {text}).catch(failed);
 };
 $("#mute").onchange = () => api("POST", "/api/mute", {value: $("#mute").checked}).catch(failed);
+
+// --- Its voice in this browser ("Play here") ---
+let soundFeed = null, audioContext = null, nextStart = 0, voiceNodes = [];
+
+function playHere(on) {
+  $("#play-here").checked = on;
+  try { localStorage.setItem("playHere", on ? "1" : ""); } catch {}
+  if (!on) {
+    soundFeed?.close();
+    soundFeed = null;
+    return stopVoice();
+  }
+  audioContext ??= new AudioContext();
+  audioContext.resume();  // browsers only allow sound after a click; see the listener below
+  if (soundFeed) return;
+  soundFeed = new EventSource("/api/sound");
+  soundFeed.onmessage = message => {
+    const event = JSON.parse(message.data);
+    event.stop ? stopVoice() : playVoice(event);
+  };
+}
+
+function playVoice({rate, pcm}) {
+  if (audioContext.state !== "running") return;
+  const bytes = Uint8Array.from(atob(pcm), c => c.charCodeAt(0));
+  const samples = new Int16Array(bytes.buffer);
+  const buffer = audioContext.createBuffer(1, samples.length, rate);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < samples.length; i++) channel[i] = samples[i] / 32768;
+  const node = audioContext.createBufferSource();
+  node.buffer = buffer;
+  node.connect(audioContext.destination);
+  const start = Math.max(audioContext.currentTime, nextStart);  // right after the sentence before
+  node.start(start);
+  nextStart = start + buffer.duration;
+  voiceNodes.push(node);
+  node.onended = () => (voiceNodes = voiceNodes.filter(n => n !== node));
+}
+
+function stopVoice() {
+  voiceNodes.forEach(node => { try { node.stop(); } catch {} });
+  voiceNodes = [];
+  nextStart = 0;
+}
+
+$("#play-here").onchange = event => playHere(event.target.checked);
+// "Play here" is remembered, but a page may only make sound after a click: the first one anywhere starts it.
+addEventListener("pointerdown", () => audioContext?.resume(), {capture: true});
+try {
+  if (localStorage.getItem("playHere")) {
+    playHere(true);
+    if (audioContext.state !== "running") toast("Click anywhere to hear the robot here.");
+  }
+} catch {}
 
 let meta;
 const cue = name => api("POST", "/api/cue", {name}).catch(failed);

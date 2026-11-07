@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import queue
 import socket
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -19,6 +21,7 @@ from .control import Controller
 PAGE = Path(__file__).parent / "web" / "index.html"
 POSE_FPS = 30
 CAMERA_FPS = 12
+SOUND_KEEPALIVE = 15.0  # seconds
 
 
 class PersonalityIn(BaseModel):
@@ -106,6 +109,25 @@ def create_app(controller: Controller) -> FastAPI:
                 time.sleep(1 / POSE_FPS)
 
         return StreamingResponse(frames(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/api/sound")
+    def sound() -> StreamingResponse:
+        """Its voice, every sentence as it starts playing, as Server-Sent Events for pages set to "Play here"."""
+        listener = controller.sound.subscribe()
+
+        def events():
+            try:
+                while True:
+                    try:
+                        event = listener.get(timeout=SOUND_KEEPALIVE)
+                    except queue.Empty:
+                        yield ": still here\n\n"  # keeps the connection open, and notices when the page is gone
+                        continue
+                    yield f"data: {json.dumps(event)}\n\n"
+            finally:
+                controller.sound.unsubscribe(listener)
+
+        return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     @app.get("/api/camera.mjpg")
     def camera() -> StreamingResponse:
@@ -252,6 +274,9 @@ def create_app(controller: Controller) -> FastAPI:
 
 def port_free(host: str, port: int) -> bool:
     with socket.socket() as probe:
+        if sys.platform != "win32":  # on Windows the option would let it share a port that is really in use
+            # Like uvicorn: connections from before a restart linger for a minute and don't make the port taken.
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind((host, port))
         except OSError:

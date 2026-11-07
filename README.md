@@ -44,12 +44,13 @@ At startup it prints which speaker, microphone and camera it is using, and the a
 
 While it runs, open **http://127.0.0.1:8765** in a browser:
 
-- **Live**: the head itself, moving in real time, with the camera's view in the corner (the tracked face is boxed in green). Next to it: everything it hears and says, a box to type to it (handy for testing a prompt without talking), a mute switch, and puppet buttons that play any expression, gesture or glance on the head right away.
+- **Live**: the head itself, moving in real time, with the camera's view in the corner (the tracked face is boxed in green). Next to it: everything it hears and says, a box to type to it (handy for testing a prompt without talking), and puppet buttons that play any expression, gesture or glance on the head right away.
 - **Wiring**: how the real build is hooked up, animated live. It shows Raspberry Pi pins 1, 3, 5 and 6 going to the PCA9685, the separate servo power supply, and each servo where it sits in the head (lids above the eyes, the eye servos between them, the jaw at its hinge, the three neck servos stacked in the neck). Each servo shows its channel, model, live angle and pulse width, and its arm turns as it moves. Below the diagram you calibrate each servo's channel and safe range, moving it live (see *Running on a Raspberry Pi*).
 - **Personalities**: create, edit, duplicate and delete characters, and switch between them instantly. Each one has a name, the name it answers to, a voice and speed (empty uses the defaults from Settings), and its system prompt. They're stored in `robot.db`. The first one is imported from `personality.md`, and a second example comes along.
 - **Expressions**: every facial expression is a set of five values: eyelid openness, chin tilt, head lean, and where the eyes drift sideways and up or down. Drag a slider and the head shows the result live; save to keep it. Add your own, and they become cues the LLM can use.
 - **Memory**: everyone it has met, closest match first, with a dot on whoever is in view right now. Pick someone to see what it remembers about them: facts, preferences, habits, plans, and one-line summaries of past conversations. Edit or delete any memory, or add your own; memories you wrote or edited are never changed by the model. Name a person, merge two entries that turned out to be the same person, or forget someone completely (face, memories and journal). **Think it over** turns everything since the last time into memories right away instead of waiting.
 - **Settings**: everything from `.env`, grouped and explained. Most changes apply immediately; the ones marked *restart* (devices, recognition and voice engines, motors) take effect after a restart, which **Save and restart** does in one go.
+- **Mute speaker** and **Play here** (in the header): mute silences the robot's own speaker. Play here plays its voice in the browser you're using, on a PC or phone, each sentence as it starts and cut off when someone talks over it. Use it when the robot has no speaker yet, or to hear it from another room. The setting is remembered per browser, and since browsers only allow sound after a click, a page that was just opened starts playing after your first click.
 - **Pause** (in the header): puts it to sleep, head down and eyes nearly shut. It stops talking at once and hears, answers, watches and remarks on nothing until you click **Resume**. Messages typed meanwhile are shown as ignored. The header also shows who it recognizes in front of it.
 - **Restart** (in the header, and in the banner that lists settings waiting for one): starts the robot afresh in about three seconds. It re-reads `.env`, reopens every device, and runs any new code after a `git pull`. Click twice to confirm; the page reloads by itself when the robot is back.
 
@@ -120,7 +121,7 @@ The rest of the code only ever sees a pose: seven joints with normalized values 
 ### What you need
 
 - Raspberry Pi 5 with 4 GB, its 27 W power supply, the Active Cooler, and a 32 GB microSD card
-- A USB webcam (one with a built-in microphone saves buying a microphone) and a USB speaker, or a USB sound card with a small speaker. The Pi 5 has no headphone jack.
+- A USB webcam (one with a built-in microphone saves buying a microphone) and a USB speaker, or a USB sound card with a small speaker. The Pi 5 has no headphone jack. Until the speaker is there, **Play here** in the control panel plays the voice in your browser.
 - A PCA9685 16-channel servo board, 3 MG996R servos for the neck and 4 MG90S servos for the lids, eyes and jaw
 - A separate 5 V power supply of 10 A for the servos, a 1000 µF capacitor across its output, and servo extension cables
 

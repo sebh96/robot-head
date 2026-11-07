@@ -7,6 +7,7 @@ import queue
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 
 import numpy as np
 import sounddevice as sd
@@ -114,6 +115,8 @@ class AudioEngine:
         silence_seconds: float = 0.8,
     ) -> None:
         self.muted = False  # still talks (timing, jaw), just without sound
+        self.on_play: Callable[[np.ndarray], None] | None = None  # every sentence as it starts, e.g. for browsers
+        self.on_stop: Callable[[], None] | None = None  # a sentence was cut off
         self._listening = listen
         self._utterances: queue.Queue[np.ndarray] = queue.Queue()
         self._echo = EchoCanceller()
@@ -182,13 +185,18 @@ class AudioEngine:
             self._playback = audio.astype(np.float32)
             self._played = 0
         self._interrupted.clear()
+        if self.on_play:
+            self.on_play(audio)
 
     def stop_playback(self, interrupted: bool = False) -> None:
         with self._lock:
+            was_playing = self._played < len(self._playback)
             self._playback = np.zeros(0, dtype=np.float32)
             self._played = 0
         if interrupted:
             self._interrupted.set()
+        if was_playing and self.on_stop:
+            self.on_stop()
 
     @property
     def playing(self) -> bool:
