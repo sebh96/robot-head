@@ -9,6 +9,9 @@ because anyone in the room (or a TV) can talk to the robot.
 A skill is a written set of instructions for one kind of job (a SKILL.md, the open Agent Skills
 format). The brain sees each skill's name and description, and reads the full instructions when one
 fits. Scripts that come with a skill are never run.
+
+Searching the internet and reading web pages are built in: OpenRouter's own server tools, which it
+runs on its servers in the middle of a reply, with the same key. The robot never sees those calls.
 """
 
 from __future__ import annotations
@@ -36,6 +39,34 @@ NOT_YET = (
     "Not done: this needs the user's OK first. Tell them in one short sentence what you are about to do and ask. "
     "Call it again with the same arguments only after they say yes in their next message."
 )
+WEB_SEARCH = "openrouter:web_search"
+WEB_READ = "openrouter:web_fetch"
+# exa works with every model; native is the model maker's own search, auto picks native where there is one.
+SEARCH_ENGINES = ("exa", "parallel", "perplexity", "firecrawl", "native", "auto")
+READ_TOKENS = 6000  # a page is cut off after about this many tokens: plenty for pulling facts out of it
+READS_PER_REPLY = 3
+
+
+@dataclass
+class Internet:
+    """Searching and reading the web, done by OpenRouter itself while the model writes its reply."""
+
+    search: bool = True
+    read: bool = True
+    engine: str = "exa"
+    results: int = 3  # per search; more finds more, but the answer gets slower and costs more
+
+    def definitions(self) -> list[dict]:
+        tools = []
+        if self.search:
+            # Short extracts per result: a spoken answer needs the facts, not whole articles.
+            parameters = {"max_results": max(1, min(int(self.results), 20)), "search_context_size": "low"}
+            if self.engine and self.engine != "auto":
+                parameters["engine"] = self.engine
+            tools.append({"type": WEB_SEARCH, "parameters": parameters})
+        if self.read:
+            tools.append({"type": WEB_READ, "parameters": {"max_content_tokens": READ_TOKENS, "max_uses": READS_PER_REPLY}})
+        return tools
 
 
 @dataclass
@@ -160,6 +191,7 @@ class ToolHub:
         self.store = store
         self.timeout = timeout
         self.enabled = True  # off: the brain gets no tools and no skills
+        self.internet = Internet()
         self.log = log or (lambda kind, text: None)
         self.callback = callback  # where sign-in pages send people back to, unless a server has its own
         self._connections: dict[int, _Connection] = {}
@@ -360,7 +392,7 @@ class ToolHub:
         return usable
 
     def definitions(self) -> list[dict]:
-        """The tools, in the form OpenAI-style chat APIs take them."""
+        """The tools, in the form OpenAI-style chat APIs take them, with OpenRouter's web tools last."""
         if not self.enabled:
             return []
         definitions = [
@@ -383,7 +415,7 @@ class ToolHub:
                     "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
                 },
             })
-        return definitions
+        return definitions + self.internet.definitions()
 
     def skills_list(self) -> str:
         """The skills' names and descriptions, for the system prompt."""

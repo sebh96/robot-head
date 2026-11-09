@@ -21,7 +21,7 @@ from .observer import Observer
 from .people import People
 from .reflexes import Reflexes
 from .store import Store
-from .tools import ToolHub
+from .tools import SEARCH_ENGINES, Internet, ToolHub
 from .voice import Voice, make_speech, print_voices
 from .wiring import ServoMonitor
 
@@ -201,8 +201,15 @@ def main() -> None:
     toolbox = ToolHub(store, timeout=settings.tool_timeout_seconds,
                       callback=f"http://{panel_host}:{settings.web_port}/api/tools/oauth/callback")
     toolbox.enabled = settings.tools
+    toolbox.internet = Internet(
+        search=settings.web_search,
+        read=settings.web_read,
+        engine=settings.web_search_engine if settings.web_search_engine in SEARCH_ENGINES else "exa",
+        results=settings.web_search_results,
+    )
     toolbox.start()  # connects to the MCP servers added in the control panel, in the background
     brain.toolbox = toolbox
+    brain.location = settings.location
     threading.Thread(target=memory.run, args=(stop,), daemon=True).start()
     controller = Controller(
         settings, store, brain, voice, reflexes, conversation, engine, camera, monitor, observer, people, memory, toolbox

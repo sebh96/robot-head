@@ -23,6 +23,7 @@ from .expressions import RANGES, Expression, clamped, from_settings, valid_name
 from .motors import JOINTS, calibrated
 from .sound_feed import SoundFeed
 from .store import Personality, Store
+from .tools import SEARCH_ENGINES
 
 MAX_LEARNED_EXPRESSIONS = 40  # so a chatty model can't fill the database with faces
 MODELS_URL = "https://openrouter.ai/api/v1/models"
@@ -51,6 +52,8 @@ SETTINGS = (
     SettingSpec("REASONING_EFFORT", "Thinking before answering", "Brain", "choice", choices=("", "none", "low", "medium", "high"),
                 help="More thinking makes replies slower. Empty uses the model's default."),
     SettingSpec("SEND_CAMERA_FRAMES", "Send the camera picture with every message", "Brain", "bool", default="true"),
+    SettingSpec("LOCATION", "Where it is", "Brain",
+                help="A town and country, like Hamburg, Germany: for the weather and anything nearby. Empty: it asks when it needs to know."),
     SettingSpec("FOLLOW_UP_SECONDS", "Keep listening after answering (seconds)", "Conversation", "number", default="20"),
     SettingSpec("REMARK_AFTER_SECONDS", "Unprompted remark after this much silence (seconds, 0 = never)", "Conversation", "number", default="0"),
     SettingSpec("BARGE_IN", "Let people interrupt by talking over it", "Conversation", "bool", default="true"),
@@ -82,6 +85,15 @@ SETTINGS = (
     SettingSpec("TOOLS", "Use tools and skills", "Tools", "bool", default="true",
                 help="Pick them in the Tools tab. Off: it only talks, as if none were added."),
     SettingSpec("TOOL_TIMEOUT_SECONDS", "Give up on a tool after (seconds)", "Tools", "number", default="30"),
+    SettingSpec("WEB_SEARCH", "Search the internet", "Tools", "bool", default="true",
+                help="OpenRouter searches for it, with the same key: about half a cent to a cent per search."),
+    SettingSpec("WEB_SEARCH_ENGINE", "Search engine", "Tools", "choice", choices=SEARCH_ENGINES, default="exa",
+                help="exa works with every model. parallel is a little cheaper. native is the model maker's own search "
+                     "(Anthropic's costs about a cent), and auto uses native where there is one."),
+    SettingSpec("WEB_SEARCH_RESULTS", "Results per search", "Tools", "number", default="3",
+                help="More finds more, but the answer comes slower and costs more."),
+    SettingSpec("WEB_READ", "Read web pages", "Tools", "bool", default="true",
+                help="Open a page someone names, or one a search found, and pull out what's asked. Usually free apart from the words read."),
     SettingSpec("TTS_ENGINE", "Voice engine", "Voice", "choice", live=False, choices=("kokoro", "piper"), default="kokoro"),
     SettingSpec("TTS_VOICE", "Default voice", "Voice", "voice", help="For personalities that don't pick their own."),
     SettingSpec("TTS_SPEED", "Default speed", "Voice", "number", default="1.0"),
@@ -116,6 +128,12 @@ MEMORY_SETTINGS = {
     "MEMORY_IN_PROMPT": ("in_prompt", lambda value: max(0, int(float(value)))),
     "MEMORY_KEEP_DAYS": ("keep_days", float),
 }
+INTERNET_SETTINGS = {
+    "WEB_SEARCH": ("search", lambda value: _flag(value)),
+    "WEB_SEARCH_ENGINE": ("engine", lambda value: value if value in SEARCH_ENGINES else "exa"),
+    "WEB_SEARCH_RESULTS": ("results", lambda value: max(1, min(20, int(float(value))))),
+    "WEB_READ": ("read", lambda value: _flag(value)),
+}
 
 
 def starter_personalities(settings: Settings) -> list[Personality]:
@@ -131,6 +149,12 @@ def starter_personalities(settings: Settings) -> list[Personality]:
 
 def _flag(value: str) -> bool:
     return value.lower() in ("1", "true", "yes", "on")
+
+
+def _sites(urls: list[str]) -> list[str]:
+    """Just the sites, like bbc.com, in the order they came."""
+    hosts = (urllib.parse.urlparse(url).netloc.lower().removeprefix("www.") for url in urls)
+    return list(dict.fromkeys(host for host in hosts if host))
 
 
 def _where(server: dict) -> str:
@@ -198,6 +222,7 @@ class Controller:
         if toolbox is not None:
             toolbox.log = self.log
             brain.on_tool = lambda: reflexes.set_mode("thinking")
+            brain.on_web = lambda urls: self.log("info", f"(from the web: {', '.join(_sites(urls))})")
 
     # --- What's going on ---
 
@@ -332,7 +357,13 @@ class Controller:
                 **info,
             })
         skills = [{key: skill[key] for key in ("id", "name", "description", "source", "enabled")} for skill in self.store.skills()]
-        return {"enabled": bool(self.toolbox and self.toolbox.enabled), "servers": servers, "skills": skills}
+        internet = self.toolbox.internet if self.toolbox else None
+        return {
+            "enabled": bool(self.toolbox and self.toolbox.enabled),
+            "internet": {"search": internet.search, "read": internet.read, "engine": internet.engine} if internet else None,
+            "servers": servers,
+            "skills": skills,
+        }
 
     def tool_catalog(self, query: str, cursor: str = "") -> dict:
         if len(query.strip()) < 2:
@@ -714,6 +745,12 @@ class Controller:
             case "TOOL_TIMEOUT_SECONDS":
                 if self.toolbox is not None:
                     self.toolbox.timeout = float(value)
+            case "WEB_SEARCH" | "WEB_SEARCH_ENGINE" | "WEB_SEARCH_RESULTS" | "WEB_READ":
+                if self.toolbox is not None:
+                    attribute, convert = INTERNET_SETTINGS[key]
+                    setattr(self.toolbox.internet, attribute, convert(value))
+            case "LOCATION":
+                self.brain.location = value
 
     def models(self) -> list[str]:
         """OpenRouter models that accept images, for the model field's suggestions (fetched once)."""

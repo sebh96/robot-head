@@ -342,6 +342,8 @@
       <div class="card">
         <h2>Your tools</h2>
         <p id="tools-off" class="error-text" hidden>Tools are switched off under Settings, so it won't use any of these.</p>
+        <h3>Built in</h3>
+        <ul id="builtin-list" class="items"></ul>
         <h3>MCP servers</h3>
         <ul id="server-list" class="items"></ul>
         <h3>Skills</h3>
@@ -1205,12 +1207,31 @@ async function loadTools() {
   const data = await api("GET", "/api/tools");
   $("#tools-off").hidden = data.enabled;
   mySkills = data.skills;
+  renderInternet(data.internet);
   renderServers(data.servers);
   renderSkills(data.skills);
   // Servers connect in the background, some after you've signed in: look again until they're done.
   if (data.servers.some(s => ["connecting", "sign_in"].includes(s.state)) && activeTab === "tools") {
     toolsTimer = setTimeout(() => loadTools().catch(failed), 1500);
   }
+}
+
+/** Searching and reading the web: OpenRouter does both, so they're just two settings. */
+function renderInternet(internet) {
+  if (!internet) return $("#builtin-list").replaceChildren();
+  const item = (title, key, on, text) => {
+    const box = el("input", {type: "checkbox", checked: on});
+    box.onchange = async () => {
+      try { await api("PUT", "/api/settings", {[key]: String(box.checked)}); toast(`${title}: ${box.checked ? "on" : "off"}.`); }
+      catch (error) { box.checked = !box.checked; failed(error); }
+    };
+    return el("li", {}, el("div", {className: "top"}, el("b", {textContent: title}), el("label", {className: "switch"}, box, "on")), small(text));
+  };
+  $("#builtin-list").replaceChildren(
+    item("Search the internet", "WEB_SEARCH", internet.search,
+      `For news, weather, opening hours and anything it doesn't know. OpenRouter searches with your key (engine: ${internet.engine}), about half a cent to a cent a search.`),
+    item("Read web pages", "WEB_READ", internet.read,
+      "Opens a page you name, or one a search found, and pulls out what you asked. Engine, results and where the robot is: under Settings."));
 }
 
 function renderServers(servers) {

@@ -66,6 +66,11 @@ class Settings:
     face_match: float
     tools: bool
     tool_timeout_seconds: float
+    web_search: bool
+    web_search_engine: str
+    web_search_results: int
+    web_read: bool
+    location: str
     motors: str
     web_ui: bool
     web_host: str
@@ -111,6 +116,11 @@ def load_settings() -> Settings:
         face_match=float(_get("FACE_MATCH", "0.4")),
         tools=_flag("TOOLS", True),
         tool_timeout_seconds=float(_get("TOOL_TIMEOUT_SECONDS", "30")),
+        web_search=_flag("WEB_SEARCH", True),
+        web_search_engine=_get("WEB_SEARCH_ENGINE", "exa"),
+        web_search_results=int(float(_get("WEB_SEARCH_RESULTS", "3"))),
+        web_read=_flag("WEB_READ", True),
+        location=_get("LOCATION"),
         motors=_get("MOTORS", "sim"),
         web_ui=_flag("WEB_UI", True),
         web_host=_get("WEB_HOST", "127.0.0.1"),
