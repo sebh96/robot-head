@@ -289,6 +289,9 @@ class Controller:
 
     def learn_name(self, name: str) -> None:
         """Someone told it their name (the [name=...] cue): tag the face in front of it with that name."""
+        if name.strip().lower() in self.store.robot_names():
+            self.log("info", f"(didn't take {name} as their name: it's one of the robot's own)")
+            return
         person = self.people.closest() if self.people else None
         if person is not None:
             self.store.rename_person(person, name)

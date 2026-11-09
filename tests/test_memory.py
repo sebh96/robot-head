@@ -14,7 +14,7 @@ from robot_head.memory import Memory, parse_json
 from robot_head.motors import SimulatedMotors
 from robot_head.people import People
 from robot_head.reflexes import SLEEPING_LIDS, Reflexes
-from robot_head.store import Store
+from robot_head.store import Personality, Store
 
 
 @pytest.fixture
@@ -161,6 +161,18 @@ def test_the_brain_hears_what_it_remembers_about_whoever_is_there(store):
     assert [(e["person_id"], e["kind"]) for e in store.unreflected()] == [(stranger, "heard"), (stranger, "said")]
     memory.enabled = False
     assert memory.context() == ""
+
+
+def test_the_robots_own_names_are_never_taken_for_a_persons(store, robot):  # noqa: F811
+    store.seed([Personality("Archie", "You are Archie.", "Archie"), Personality("Daniel", "You are Daniel.", "Daniel")])
+    person = store.add_person(0)
+    store.write_journal(person, "heard", "Daniel, what do you know about Daniel Rif?", time.time())
+    answers = Answers({"name": "Daniel", "add": [], "summary": "They asked about Daniel Rif."})
+    Memory(store, answers).reflect()
+    assert "The head goes by Archie or Bolt or Daniel." in answers.prompts[0]  # every personality, not just this one
+    assert store.person(person)["name"] == ""  # saying the robot's name doesn't make it theirs
+    robot.learn_name("Bolt")  # the [name=...] cue
+    assert any("didn't take Bolt" in event["text"] for event in robot.state()["events"])
 
 
 def test_the_model_learns_names_with_a_cue():

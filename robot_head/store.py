@@ -177,6 +177,13 @@ class Store:
         active = self.personality(int(row[0])) if row else None
         return active or self.personalities()[0]
 
+    def robot_names(self) -> set[str]:
+        """Every name the robot goes by, lowercased: its personalities' names and the names they answer to.
+        People say these to get its attention, so they're never a person's name."""
+        with self._lock:
+            rows = self._db.execute("select name, wake_name from personalities").fetchall()
+        return {name.strip().lower() for row in rows for name in row if name and name.strip()}
+
     def set_active(self, personality_id: int) -> None:
         with self._lock, self._db:
             self._db.execute("insert or replace into state values ('active_personality', ?)", (str(personality_id),))

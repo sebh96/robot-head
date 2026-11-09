@@ -27,6 +27,7 @@ JOURNAL_LABELS = {"heard": "they said", "said": "you said", "saw": "you saw them
 REFLECT = """\
 You keep the long-term memory of an animatronic head. Below is what recently happened with {who},
 and what you already remember about them. Today is {today}.
+The head goes by {robot}. People say that to get its attention, so it is never their own name.
 
 Already remembered (id: kind: text):
 {memories}
@@ -35,7 +36,7 @@ Recent journal, oldest first:
 {journal}
 
 Reply with JSON only, in this shape:
-{{"name": "<their first name if they said it and it is not known yet, else null>",
+{{"name": "<their first name if they clearly said it's theirs, like \\"I'm Sam\\", and it is not known yet, else null>",
   "add": [{{"kind": "fact|preference|habit|plan", "text": "..."}}],
   "update": [{{"id": 0, "text": "..."}}],
   "forget": [0],
@@ -193,9 +194,11 @@ class Memory:
             f"- {time.strftime('%a %d %b %H:%M', time.localtime(e['time']))}, {JOURNAL_LABELS.get(e['kind'], e['kind'])}: {e['text']}"
             for e in items
         )
+        robot_names = self.store.robot_names()
         prompt = REFLECT.format(
             who=who,
             today=time.strftime("%A %d %B %Y", time.localtime(now)),  # with the year, or it guesses one
+            robot=" or ".join(sorted(name.title() for name in robot_names)) or "no name",
             memories=remembered or "(nothing yet)",
             journal=journal,
             limit=MAX_ADDITIONS,
@@ -208,7 +211,9 @@ class Memory:
         name = answer.get("name")
         if person is not None and isinstance(name, str) and name.strip():
             record = self.store.person(person)
-            if record and not record["name"]:
+            if name.strip().lower() in robot_names:
+                self.log("info", f"(didn't take {name.strip()} as their name: it's one of the robot's own)")
+            elif record and not record["name"]:
                 self.store.rename_person(person, name.strip())
                 self.log("info", f"Learned a name: {name.strip()}")
                 changes += 1
