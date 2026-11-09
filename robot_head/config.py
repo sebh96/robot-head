@@ -41,6 +41,7 @@ class Settings:
     stt_language: str | None
     stt_device: str
     save_recordings: bool
+    noise_filter: bool
     mic_device: int | str | None
     speaker_device: int | str | None
     silence_seconds: float
@@ -90,6 +91,7 @@ def load_settings() -> Settings:
         stt_language=_get("STT_LANGUAGE") or None,
         stt_device=_get("STT_DEVICE", "cpu"),
         save_recordings=_flag("SAVE_RECORDINGS", False),
+        noise_filter=_flag("NOISE_FILTER", True),
         mic_device=_audio_device(_get("MIC_DEVICE")),
         speaker_device=_audio_device(_get("SPEAKER_DEVICE")),
         silence_seconds=float(_get("SILENCE_SECONDS", "0.8")),

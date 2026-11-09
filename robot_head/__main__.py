@@ -237,11 +237,12 @@ def main() -> None:
 
     listen = None
     if voice_mode:
-        from .ears import make_ears, save_recording
+        from .ears import SpeechCheck, make_ears, save_recording
 
         print("Loading speech recognition (the first run downloads the model)...")
         try:
             ears = make_ears(settings.stt_engine, settings.stt_model, settings.stt_device, settings.stt_language)
+            speech = SpeechCheck()
         except ValueError as error:
             sys.exit(str(error))
         print("Measuring background noise, stay quiet for a second...")
@@ -251,6 +252,11 @@ def main() -> None:
             audio = engine.next_utterance(timeout)
             if audio is None or conversation.paused:  # paused: whatever it heard is dropped unheard
                 return None
+            if controller.noise_filter and not speech.is_speech(audio):
+                # A tap, typing, a chair: recognition would only guess "Mm." or "Yeah." at it.
+                if controller.save_recordings:
+                    save_recording(audio, "(not speech)")
+                return ""
             text = ears.transcribe(audio)
             if controller.save_recordings:
                 save_recording(audio, text)

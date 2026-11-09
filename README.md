@@ -113,7 +113,7 @@ Cues the model can use:
 - **Look**: the face and the wiring diagram are drawn in the browser, in `robot_head/web/index.html` (`faceSVG` and the Wiring section). The face's colors are in `C` and `LENS_TINT` sets how dark the glasses are; `SPOTS` places each servo in the head on the diagram.
 - **Model**: any OpenRouter model that accepts images works; set `OPENROUTER_MODEL` in `.env`. Every reply prints `[brain] first words after …s`, so you can compare how quickly models respond. `REASONING_EFFORT=none` (the default) keeps replies quick: with Haiku 5.5 and a camera frame it started talking after about 1 s, while `low` took 3–6 s. Models that always think, like the Gemini Flash family, need `low` instead.
 - **Voice**: [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) is the default engine. It runs locally and sounds far more natural than Piper. Pick a voice with `TTS_VOICE` (`--list-voices` lists them; male ones start with `am_` for American or `bm_` for British) and set the pace with `TTS_SPEED`. `TTS_ENGINE=piper` switches to the lighter Piper voices.
-- **Speech recognition**: [NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) runs locally. On a Ryzen 5 5600X it transcribes a phrase in about 0.25 s, as accurately as Whisper models eight times slower. `STT_ENGINE=whisper` switches to Whisper for languages Parakeet doesn't know; set `STT_LANGUAGE` with it, or Whisper guesses the language on every phrase.
+- **Speech recognition**: [NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) runs locally. On a Ryzen 5 5600X it transcribes a phrase in about 0.25 s, as accurately as Whisper models eight times slower. Before that, a small voice detector ([Silero VAD](https://github.com/snakers4/silero-vad)) checks that a sound has speech in it, so taps, typing and chairs never get guessed into a "Mm" or "Yeah" (`NOISE_FILTER`). `STT_ENGINE=whisper` switches to Whisper for languages Parakeet doesn't know; set `STT_LANGUAGE` with it, or Whisper guesses the language on every phrase.
 - **Language**: Parakeet understands 25 European languages, German included, without any setting. For a German voice, set `TTS_ENGINE=piper` and `TTS_VOICE=de_DE-thorsten-medium` (Kokoro has no German). The model answers in the language you speak.
 
 All settings are in `.env.example` with a comment each.
@@ -125,7 +125,7 @@ The rest of the code only ever sees a pose: seven joints with normalized values 
 ### What you need
 
 - Raspberry Pi 5 with 4 GB, its 27 W power supply, the Active Cooler, and a 32 GB microSD card
-- A USB webcam (one with a built-in microphone saves buying a microphone) and a USB speaker, or a USB sound card with a small speaker. The Pi 5 has no headphone jack. Until the speaker is there, **Play here** in the control panel plays the voice in your browser.
+- A USB webcam and a USB microphone (a webcam's built-in one works, but many only record at telephone quality, 8 kHz, which costs accuracy, names especially; `cat /proc/asound/card*/stream0` shows the rates) and a USB speaker, or a USB sound card with a small speaker. The Pi 5 has no headphone jack. Until the speaker is there, **Play here** in the control panel plays the voice in your browser.
 - A PCA9685 16-channel servo board, 3 MG996R servos for the neck and 4 MG90S servos for the lids, eyes and jaw
 - A separate 5 V power supply of 10 A for the servos, a 1000 µF capacitor across its output, and servo extension cables
 
@@ -177,7 +177,7 @@ Everyday commands on the Pi:
 - **Web searches cost a little and aren't private.** About half a cent (`parallel`) to a cent (the model's own search) per search, plus the words read; page reading is usually free apart from the words. Searches and the pages it reads go through OpenRouter and the search provider. A web page could try to talk it into something: it's told to treat what pages say as information only, and anything that does something still waits for your yes.
 - **Signing in to a server sends you back to the address you opened the control panel at.** Some sign-in services only accept `127.0.0.1` or `localhost`; for a robot on a Pi, open the panel through the SSH command the installer prints when that happens. Servers that run on the robot itself mostly need Node.js, which the Pi installer adds.
 - **Short-term memory is the last 12 exchanges.** Older parts of a conversation reach it only as what it chose to remember.
-- **Speech detection is simple.** It measures background noise at startup and then reacts to loudness. In a noisy room, raise `SILENCE_SECONDS` or use a directional microphone.
+- **Speech detection starts on loudness.** It measures background noise at startup and starts recording at anything louder; the voice detector then drops what wasn't speech. Steady noise that starts later (a fan, music) can keep a recording going until it's 15 s long; raise `SILENCE_SECONDS` or use a directional microphone in a noisy room.
 - **Name spotting runs speech recognition on everything it hears.** That's fine on a PC; on a Raspberry Pi, a dedicated wake-word model (like openWakeWord) would be lighter.
 
 ## Troubleshooting
@@ -192,6 +192,7 @@ Everyday commands on the Pi:
 | It cuts you off mid-sentence | Raise `SILENCE_SECONDS` to 1.2 |
 | It ignores you | Say its name; check the console's `(not talking to me: …)` lines to see what it heard |
 | It interrupts itself, or prints `(my own voice came back: …)` a lot | Lower the speaker volume or move it away from the mic; `BARGE_IN=false` turns interrupting off |
+| It answers "Mm" or "Yeah" nobody said, or the log fills with `(not talking to me: Mm.)` | Check that **Ignore sounds that aren't speech** (`NOISE_FILTER`) is on |
 | Wrong words get transcribed | Set `SAVE_RECORDINGS=true`, talk to it, and listen to the clips in `recordings/` next to `transcripts.txt`. Quiet or cut-off clips point at the microphone (pick another with `--choose-devices`, or move closer) or at `SILENCE_SECONDS` |
 
 Run the tests with `uv run pytest`.

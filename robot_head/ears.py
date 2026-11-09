@@ -17,6 +17,36 @@ from .config import PROJECT_DIR
 RATE = 16000
 RECORDINGS_DIR = PROJECT_DIR / "recordings"
 DEFAULT_MODELS = {"parakeet": "nemo-parakeet-tdt-0.6b-v3", "whisper": "small"}
+MIN_SPEECH_SECONDS = 0.15  # less speech than this in a sound, and it was a tap, a cough or a chair
+SPEECH_LIKELY = 0.5  # how sure the voice detector must be that a moment is speech
+
+
+class SpeechCheck:
+    """Silero VAD, a small voice detector: tells speech from the other sounds that make the microphone jump.
+
+    Speech recognition turns any sound into its best guess at words ("Mm.", "Yeah."), so a sound
+    without speech in it is better never recognised at all.
+    """
+
+    def __init__(self, vad=None) -> None:
+        if vad is None:
+            import onnx_asr
+
+            vad = onnx_asr.load_vad("silero")
+        self._vad = vad
+
+    def speech_seconds(self, audio: np.ndarray) -> float:
+        """How much of 16 kHz mono audio is speech."""
+        if len(audio) == 0:
+            return 0.0
+        (segments,) = self._vad.segment_batch(
+            audio[np.newaxis, :].astype(np.float32), np.array([len(audio)]), RATE,
+            threshold=SPEECH_LIKELY, min_speech_duration_ms=0, speech_pad_ms=0,
+        )
+        return sum(end - start for start, end in segments) / RATE
+
+    def is_speech(self, audio: np.ndarray) -> bool:
+        return self.speech_seconds(audio) >= MIN_SPEECH_SECONDS
 
 
 class ParakeetEars:

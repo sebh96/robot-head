@@ -100,6 +100,8 @@ SETTINGS = (
     SettingSpec("STT_LANGUAGE", "Language (Whisper only)", "Hearing", live=False, help="A code like en or de."),
     SettingSpec("STT_DEVICE", "Whisper runs on", "Hearing", "choice", live=False, choices=("cpu", "cuda"), default="cpu"),
     SettingSpec("SAVE_RECORDINGS", "Save what it hears to recordings/", "Hearing", "bool", default="false"),
+    SettingSpec("NOISE_FILTER", "Ignore sounds that aren't speech", "Hearing", "bool", default="true",
+                help="A small voice detector checks every sound first, so taps, typing and chairs never turn into a \"Mm\" or \"Yeah\" it answers."),
     SettingSpec("MIC_DEVICE", "Microphone", "Devices", "mic", live=False),
     SettingSpec("SPEAKER_DEVICE", "Speaker", "Devices", "speaker", live=False),
     SettingSpec("CAMERA_INDEX", "Camera", "Devices", "camera", live=False, default="0"),
@@ -198,6 +200,7 @@ class Controller:
         self.people = people
         self.memory = memory
         self.save_recordings = settings.save_recordings
+        self.noise_filter = settings.noise_filter
         self.restart_needed: set[str] = set()
         self.on_restart: Callable[[], None] | None = None  # set by the launcher
         self.started = time.time()
@@ -724,6 +727,8 @@ class Controller:
                 self._apply_voice()
             case "SAVE_RECORDINGS":
                 self.save_recordings = _flag(value)
+            case "NOISE_FILTER":
+                self.noise_filter = _flag(value)
             case "CAMERA_FLIP":
                 if self.camera is not None:
                     self.camera.flip = _flag(value)
