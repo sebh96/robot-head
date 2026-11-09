@@ -11,8 +11,9 @@ step() { printf '\n== %s\n' "$1"; }
 
 step "System packages"
 sudo apt-get update
-# PortAudio for sound, the libraries OpenCV needs, and tools for checking I2C and sound by hand.
-packages=(git curl i2c-tools alsa-utils libportaudio2 libsndfile1 libgl1 libglib2.0-0)
+# PortAudio for sound, the libraries OpenCV needs, tools for checking I2C and sound by hand, and Node.js
+# for MCP tool servers that run here (most are npm packages; online ones need nothing).
+packages=(git curl i2c-tools alsa-utils libportaudio2 libsndfile1 libgl1 libglib2.0-0 nodejs npm)
 # Desktop images run PipeWire: send plain ALSA programs, like the robot, through it too.
 if dpkg -s pipewire >/dev/null 2>&1; then packages+=(pipewire-alsa); fi
 sudo apt-get install -y "${packages[@]}"

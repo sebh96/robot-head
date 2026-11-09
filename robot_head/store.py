@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from dataclasses import asdict, dataclass, fields
@@ -64,7 +65,40 @@ create table if not exists servos (
     angle_min real not null,
     angle_max real not null
 );
+create table if not exists tool_servers (
+    id integer primary key,
+    name text not null,
+    title text not null,
+    description text not null default '',
+    url text not null default '',
+    transport text not null default 'streamable-http',
+    command text not null default '',
+    args text not null default '[]',
+    headers text not null default '{}',
+    env text not null default '{}',
+    callback text not null default '',
+    oauth text not null default '{}',
+    enabled integer not null default 1,
+    added real not null
+);
+create table if not exists tool_choices (
+    server_id integer not null,
+    tool text not null,
+    enabled integer not null default 1,
+    ask_first integer,
+    primary key (server_id, tool)
+);
+create table if not exists skills (
+    id integer primary key,
+    name text not null unique,
+    description text not null,
+    instructions text not null,
+    source text not null default '',
+    enabled integer not null default 1,
+    added real not null
+);
 """
+TOOL_SERVER_JSON = ("args", "headers", "env", "oauth")
 
 
 @dataclass
@@ -289,6 +323,93 @@ class Store:
     def reset_servo(self, joint: str) -> None:
         with self._lock, self._db:
             self._db.execute("delete from servos where joint = ?", (joint,))
+
+    # --- Tools: MCP servers it connects to, with the keys and sign-in tokens they need (never sent to the page) ---
+
+    def tool_servers(self) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute("select * from tool_servers order by added").fetchall()
+        return [_tool_server(row) for row in rows]
+
+    def tool_server(self, server_id: int) -> dict | None:
+        with self._lock:
+            row = self._db.execute("select * from tool_servers where id = ?", (server_id,)).fetchone()
+        return _tool_server(row) if row else None
+
+    def add_tool_server(self, server: dict, now: float) -> int:
+        values = {key: json.dumps(value) if key in TOOL_SERVER_JSON else value for key, value in server.items()}
+        columns = ", ".join(values) + ", added"
+        with self._lock, self._db:
+            return self._db.execute(
+                f"insert into tool_servers ({columns}) values ({', '.join('?' * len(values))}, ?)", (*values.values(), now)
+            ).lastrowid
+
+    def update_tool_server(self, server_id: int, **changes) -> None:
+        values = {key: json.dumps(value) if key in TOOL_SERVER_JSON else value for key, value in changes.items()}
+        with self._lock, self._db:
+            self._db.execute(
+                f"update tool_servers set {', '.join(f'{key} = ?' for key in values)} where id = ?", (*values.values(), server_id)
+            )
+
+    def delete_tool_server(self, server_id: int) -> None:
+        with self._lock, self._db:
+            self._db.execute("delete from tool_choices where server_id = ?", (server_id,))
+            self._db.execute("delete from tool_servers where id = ?", (server_id,))
+
+    def tool_choices(self) -> dict[tuple[int, str], dict]:
+        """What you chose per tool: on or off, and whether it asks first (None: decided by the tool)."""
+        with self._lock:
+            rows = self._db.execute("select * from tool_choices").fetchall()
+        return {
+            (row["server_id"], row["tool"]): {
+                "enabled": bool(row["enabled"]),
+                "ask_first": None if row["ask_first"] is None else bool(row["ask_first"]),
+            }
+            for row in rows
+        }
+
+    def set_tool_choice(self, server_id: int, tool: str, enabled: bool, ask_first: bool | None) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "insert or replace into tool_choices (server_id, tool, enabled, ask_first) values (?, ?, ?, ?)",
+                (server_id, tool, int(enabled), None if ask_first is None else int(ask_first)),
+            )
+
+    # --- Skills: written instructions it reads when one fits ---
+
+    def skills(self) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute("select * from skills order by name").fetchall()
+        return [{**dict(row), "enabled": bool(row["enabled"])} for row in rows]
+
+    def save_skill(self, name: str, description: str, instructions: str, source: str, now: float) -> int:
+        """Add a skill, or replace the one with the same name."""
+        with self._lock, self._db:
+            self._db.execute(
+                "insert into skills (name, description, instructions, source, added) values (?, ?, ?, ?, ?)"
+                " on conflict(name) do update set description = excluded.description,"
+                " instructions = excluded.instructions, source = excluded.source",
+                (name, description, instructions, source, now),
+            )
+            return self._db.execute("select id from skills where name = ?", (name,)).fetchone()[0]
+
+    def update_skill(self, skill_id: int, **changes) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                f"update skills set {', '.join(f'{key} = ?' for key in changes)} where id = ?", (*changes.values(), skill_id)
+            )
+
+    def delete_skill(self, skill_id: int) -> None:
+        with self._lock, self._db:
+            self._db.execute("delete from skills where id = ?", (skill_id,))
+
+
+def _tool_server(row: sqlite3.Row) -> dict:
+    server = dict(row)
+    for key in TOOL_SERVER_JSON:
+        server[key] = json.loads(server[key])
+    server["enabled"] = bool(server["enabled"])
+    return server
 
 
 def person_label(person_id: int, name: str) -> str:

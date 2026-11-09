@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import time
+import urllib.parse
 import urllib.request
 from collections import deque
 from collections.abc import Callable
@@ -13,6 +14,7 @@ from dataclasses import asdict, dataclass
 
 from dotenv import dotenv_values
 
+from . import catalog
 from .brain import RECOMMEND_ABOUT
 from .config import DEFAULT_MODEL, PROJECT_DIR, Settings
 from .cues import GAZES, GESTURES
@@ -77,6 +79,9 @@ SETTINGS = (
                 help="Faces are stored as numbers in robot.db, never as pictures. Off: everyone counts as the same person."),
     SettingSpec("FACE_MATCH", "How alike two faces must be to count as one person (0-1)", "Memory", "number", default="0.4",
                 help="Raise it if it mixes people up, lower it if it keeps meeting you for the first time."),
+    SettingSpec("TOOLS", "Use tools and skills", "Tools", "bool", default="true",
+                help="Pick them in the Tools tab. Off: it only talks, as if none were added."),
+    SettingSpec("TOOL_TIMEOUT_SECONDS", "Give up on a tool after (seconds)", "Tools", "number", default="30"),
     SettingSpec("TTS_ENGINE", "Voice engine", "Voice", "choice", live=False, choices=("kokoro", "piper"), default="kokoro"),
     SettingSpec("TTS_VOICE", "Default voice", "Voice", "voice", help="For personalities that don't pick their own."),
     SettingSpec("TTS_SPEED", "Default speed", "Voice", "number", default="1.0"),
@@ -128,6 +133,14 @@ def _flag(value: str) -> bool:
     return value.lower() in ("1", "true", "yes", "on")
 
 
+def _where(server: dict) -> str:
+    """Where a server runs, without anything secret: online addresses often have a key in them."""
+    if server["url"]:
+        return "online at " + urllib.parse.urlparse(server["url"]).netloc
+    package = next((arg for arg in server["args"] if not arg.startswith("-") and arg not in ("run",)), "")
+    return f"runs here: {server['command']} {package}".strip()
+
+
 class Controller:
     def __init__(
         self,
@@ -143,8 +156,10 @@ class Controller:
         observer=None,
         people=None,
         memory=None,
+        toolbox=None,
     ) -> None:
         self.store = store
+        self.toolbox = toolbox
         self.brain = brain
         self.voice = voice
         self.reflexes = reflexes
@@ -180,6 +195,9 @@ class Controller:
                 observer.on_activity = memory.record_activity
         if people is not None:
             people.on_new_person = lambda person: self.log("info", f"(met someone new: {people.label(person)})")
+        if toolbox is not None:
+            toolbox.log = self.log
+            brain.on_tool = lambda: reflexes.set_mode("thinking")
 
     # --- What's going on ---
 
@@ -291,6 +309,153 @@ class Controller:
         if self.memory is None:
             raise ValueError("Memory isn't running.")
         threading.Thread(target=self.memory.reflect, daemon=True).start()
+
+    # --- Tools (MCP servers) and skills ---
+
+    def tools(self) -> dict:
+        """Every server with its state and tools, and every skill. Keys are named, never shown."""
+        status = self.toolbox.status() if self.toolbox else {}
+        servers = []
+        for server in self.store.tool_servers():
+            info = status.get(server["id"]) or {
+                "state": "connecting" if server["enabled"] else "off", "error": "", "sign_in_url": "", "tools": []
+            }
+            servers.append({
+                "id": server["id"],
+                "name": server["name"],
+                "title": server["title"],
+                "description": server["description"],
+                "enabled": server["enabled"],
+                "where": _where(server),
+                "keys": [{"name": key, "set": bool(value)} for key, value in {**server["headers"], **server["env"]}.items()],
+                "signed_in": bool(server["oauth"].get("tokens")),
+                **info,
+            })
+        skills = [{key: skill[key] for key in ("id", "name", "description", "source", "enabled")} for skill in self.store.skills()]
+        return {"enabled": bool(self.toolbox and self.toolbox.enabled), "servers": servers, "skills": skills}
+
+    def tool_catalog(self, query: str, cursor: str = "") -> dict:
+        if len(query.strip()) < 2:
+            raise ValueError("Type at least two letters.")
+        try:
+            return catalog.search_servers(query.strip(), cursor)
+        except OSError as error:
+            raise ValueError(f"Couldn't reach the MCP Registry: {error}") from None
+
+    def add_tool_server(self, data: dict) -> int:
+        """Add a server from the registry ({name, title, description, option, values}) or by its address
+        ({title, url, header, value}, for Zapier, Composio, Smithery and the like). ``origin`` is where the
+        control panel was opened, so a sign-in page can send the person back there."""
+        if data.get("option"):
+            server = {
+                "name": data["name"],
+                "title": (data.get("title") or data["name"]).strip(),
+                "description": data.get("description", ""),
+                **catalog.fill(data["option"], data.get("values") or {}),
+            }
+        else:
+            url = str(data.get("url", "")).strip()
+            if not url.startswith(("https://", "http://")):
+                raise ValueError("The address has to start with https://")
+            header, value = str(data.get("header", "")).strip(), str(data.get("value", "")).strip()
+            title = str(data.get("title", "")).strip() or urllib.parse.urlparse(url).netloc
+            server = {
+                "name": title, "title": title, "description": "", "url": url,
+                "transport": "sse" if url.rstrip("/").endswith("/sse") else "streamable-http",
+                "headers": {header: value} if header and value else {}, "command": "", "args": [], "env": {},
+            }
+        origin = str(data.get("origin", "")).rstrip("/")
+        if server["url"] and origin.startswith(("http://", "https://")):
+            server["callback"] = f"{origin}/api/tools/oauth/callback"
+        server_id = self.store.add_tool_server(server, time.time())
+        if self.toolbox is not None:
+            self.toolbox.reload(server_id)
+        self.log("info", f"Added the tools from {server['title']}.")
+        return server_id
+
+    def update_tool_server(self, server_id: int, data: dict) -> None:
+        """Switch a server on or off, or set its keys (an empty key keeps the one it has)."""
+        server = self.store.tool_server(server_id)
+        if server is None:
+            raise ValueError("That server isn't there any more.")
+        changes = {}
+        if data.get("enabled") is not None:
+            changes["enabled"] = int(bool(data["enabled"]))
+        for key, value in (data.get("keys") or {}).items():
+            if not value:
+                continue
+            for where in ("headers", "env"):
+                if key in server[where]:
+                    changes[where] = {**changes.get(where, server[where]), key: value}
+        if changes:
+            self.store.update_tool_server(server_id, **changes)
+        if self.toolbox is not None:
+            self.toolbox.reload(server_id)
+
+    def finish_sign_in(self, code: str, state: str, iss: str | None = None) -> str:
+        if self.toolbox is None or not code:
+            raise ValueError("The sign-in page sent no code back. Try again from the Tools tab.")
+        title = self.toolbox.finish_sign_in(code, state, iss)
+        self.log("info", f"Signed in to {title}.")
+        return title
+
+    def delete_tool_server(self, server_id: int) -> None:
+        self.store.delete_tool_server(server_id)
+        if self.toolbox is not None:
+            self.toolbox.reload(server_id)
+
+    def set_tool_choice(self, server_id: int, tool: str, enabled: bool, ask_first: bool) -> None:
+        self.store.set_tool_choice(server_id, tool, enabled, ask_first)
+        if self.toolbox is not None:
+            self.toolbox.refresh()
+
+    def skill_catalog(self, source: str) -> dict:
+        """Skills to add: the ones that come with the robot ("robot"), or Anthropic's examples from GitHub."""
+        if source == "robot":
+            return {"skills": catalog.builtin_skills(), "error": ""}
+        try:
+            return {"skills": catalog.anthropic_skills(), "error": ""}
+        except (OSError, ValueError) as problem:
+            return {"skills": [], "error": f"Couldn't reach GitHub: {problem}"}
+
+    def add_skill(self, data: dict) -> None:
+        """Add a skill from the catalog or a link ({source}), or one you wrote ({name, description, instructions})."""
+        if data.get("source"):
+            try:
+                name, description, instructions = catalog.load_skill(data["source"])
+            except OSError as error:
+                raise ValueError(f"Couldn't download it: {error}") from None
+            source = data["source"]
+        else:
+            name, description = str(data.get("name", "")).strip(), str(data.get("description", "")).strip()
+            instructions, source = str(data.get("instructions", "")).strip(), "yours"
+            if not name or not description or not instructions:
+                raise ValueError("A skill needs a name, a description of when to use it, and instructions.")
+        self.store.save_skill(name, description, instructions, source, time.time())
+        if self.toolbox is not None:
+            self.toolbox.refresh()
+        self.log("info", f"Learned the skill {name}.")
+
+    def skill(self, skill_id: int) -> dict:
+        skill = next((skill for skill in self.store.skills() if skill["id"] == skill_id), None)
+        if skill is None:
+            raise ValueError("That skill isn't there any more.")
+        return skill
+
+    def update_skill(self, skill_id: int, data: dict) -> None:
+        self.skill(skill_id)
+        changes = {key: str(data[key]).strip() for key in ("name", "description", "instructions") if data.get(key)}
+        if data.get("enabled") is not None:
+            changes["enabled"] = int(bool(data["enabled"]))
+        if changes:
+            self.store.update_skill(skill_id, **changes)
+        if self.toolbox is not None:
+            self.toolbox.refresh()
+
+    def delete_skill(self, skill_id: int) -> None:
+        self.store.delete_skill(skill_id)
+        if self.toolbox is not None:
+            self.toolbox.refresh()
 
     def restart(self) -> None:
         """Start the robot afresh: re-reads .env and reopens every device. Back in a few seconds."""
@@ -543,6 +708,12 @@ class Controller:
             case "FACE_MATCH":
                 if self.people is not None:
                     self.people.match = float(value)
+            case "TOOLS":
+                if self.toolbox is not None:
+                    self.toolbox.enabled = _flag(value)
+            case "TOOL_TIMEOUT_SECONDS":
+                if self.toolbox is not None:
+                    self.toolbox.timeout = float(value)
 
     def models(self) -> list[str]:
         """OpenRouter models that accept images, for the model field's suggestions (fetched once)."""

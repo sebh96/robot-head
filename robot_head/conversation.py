@@ -160,7 +160,7 @@ class Conversation:
         self.reflexes.set_mode("thinking")
         image = self.camera.snapshot_jpeg() if self.camera and self.send_frames else None
         try:
-            self._speak_reply(text, image)
+            self._speak_reply(text, image, from_user)
         except openai.AuthenticationError:
             self._note("error", "OpenRouter rejected the API key; fix OPENROUTER_API_KEY in the control panel or .env.")
             self.reflexes.cue("sad")
@@ -172,7 +172,7 @@ class Conversation:
         self._last_talk = time.monotonic()
         self._engaged_until = self._last_talk + self.follow_up_seconds
 
-    def _speak_reply(self, text: str, image: bytes | None) -> None:
+    def _speak_reply(self, text: str, image: bytes | None, from_user: bool = True) -> None:
         """Speak the reply sentence by sentence while the rest streams in; stop if interrupted.
 
         A helper thread reads the reply and starts making each sentence's audio as soon as
@@ -185,7 +185,7 @@ class Conversation:
 
         def read_reply() -> None:
             sentences = SentenceStream()
-            reply = self.brain.reply(text, image)
+            reply = self.brain.reply(text, image, from_user)
             try:
                 for chunk in reply:
                     for segment in sentences.feed(chunk):

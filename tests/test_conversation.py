@@ -15,7 +15,7 @@ class FakeBrain:
     def __init__(self, chunks, fail_after=None):
         self.chunks, self.fail_after, self.closed, self.prompts = chunks, fail_after, False, []
 
-    def reply(self, text, image=None):
+    def reply(self, text, image=None, from_user=True):
         self.prompts.append(text)
         try:
             for i, chunk in enumerate(self.chunks):
@@ -90,11 +90,11 @@ def blocks(level: float, seconds: float) -> list[np.ndarray]:
 
 
 def run(detector: SpeechDetector, pieces) -> tuple[list[float], list[np.ndarray]]:
-    """Feed (level, seconds, voice_playing) pieces; return interrupt times and utterances."""
+    """Feed (level, seconds, voice_playing[, how loud it played]) pieces; return interrupt times and utterances."""
     interrupts, utterances, t = [], [], 0.0
-    for level, seconds, voice_playing in pieces:
+    for level, seconds, voice_playing, *played in pieces:
         for block in blocks(level, seconds):
-            interrupt, utterance = detector.feed(block, voice_playing)
+            interrupt, utterance = detector.feed(block, voice_playing, *played)
             if interrupt:
                 interrupts.append(round(t, 2))
             if utterance is not None:
@@ -119,6 +119,21 @@ def test_short_echo_bursts_while_talking_do_not_interrupt():
 def test_talking_over_the_head_interrupts_it():
     interrupts, utterances = run(SpeechDetector(), [(0.001, 1, True), (0.05, 2, True), (0.001, 1.5, False)])
     assert len(interrupts) == 1 and 1.2 <= interrupts[0] <= 1.4  # about 300 ms after they start
+    assert len(utterances) == 1
+
+
+def test_its_own_leftover_voice_never_interrupts_it():
+    # A loud speaker next to the microphone: for its first second the echo canceller is still adapting
+    # and much of its voice comes back, far above the fixed floor. Then only a faint rest is left.
+    detector = SpeechDetector()
+    pieces = [(0.05, 1, True, 0.2), (0.003, 4, True, 0.2), (0.001, 1.5, False, 0.0)]
+    assert run(detector, pieces) == ([], [])
+    assert detector.leftover == pytest.approx(0.003, rel=0.1)
+
+
+def test_someone_clearly_louder_than_its_leftovers_interrupts_it():
+    interrupts, utterances = run(SpeechDetector(), [(0.003, 2, True, 0.2), (0.05, 2, True, 0.2), (0.001, 1.5, False, 0.0)])
+    assert len(interrupts) == 1 and 2.2 <= interrupts[0] <= 2.4  # about 300 ms after they start
     assert len(utterances) == 1
 
 

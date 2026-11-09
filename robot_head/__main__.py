@@ -21,6 +21,7 @@ from .observer import Observer
 from .people import People
 from .reflexes import Reflexes
 from .store import Store
+from .tools import ToolHub
 from .voice import Voice, make_speech, print_voices
 from .wiring import ServoMonitor
 
@@ -196,9 +197,15 @@ def main() -> None:
         keep_days=settings.memory_keep_days,
     )
     brain.remembered = memory.context
+    panel_host = "127.0.0.1" if settings.web_host in ("0.0.0.0", "::") else settings.web_host
+    toolbox = ToolHub(store, timeout=settings.tool_timeout_seconds,
+                      callback=f"http://{panel_host}:{settings.web_port}/api/tools/oauth/callback")
+    toolbox.enabled = settings.tools
+    toolbox.start()  # connects to the MCP servers added in the control panel, in the background
+    brain.toolbox = toolbox
     threading.Thread(target=memory.run, args=(stop,), daemon=True).start()
     controller = Controller(
-        settings, store, brain, voice, reflexes, conversation, engine, camera, monitor, observer, people, memory
+        settings, store, brain, voice, reflexes, conversation, engine, camera, monitor, observer, people, memory, toolbox
     )
     if motors_problem:
         controller.log("error", motors_problem)
@@ -265,6 +272,7 @@ def main() -> None:
         if camera:
             camera.close()
         motors.close()
+        toolbox.close()
         store.close()
     if restart.is_set():
         sys.exit(RESTART_EXIT_CODE)

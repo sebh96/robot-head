@@ -25,7 +25,16 @@ START_BLOCKS = 3  # loud blocks in a row that start an utterance
 BARGE_IN_WINDOW = 10
 BARGE_IN_LOUD = 8
 BARGE_IN_FLOOR = 0.006
-ECHO_TAIL_BLOCKS = 10  # the room keeps echoing for a moment after the voice stops
+# How much of its own voice is left after echo cancelling depends on the speaker, the microphone
+# and the room, and the canceller needs a moment to adapt: a loud speaker that overdrives a webcam's
+# microphone leaves plenty at first. So it keeps track of its own leftovers while it talks, and
+# interrupting has to be clearly louder than them.
+ECHO_WINDOW_BLOCKS = 20  # its voice can come back this late (600 ms), counting the room's reverb
+ECHO_MARGIN = 6.0  # someone talking over it has to be this many times louder than its typical leftovers
+ECHO_HISTORY_BLOCKS = 100  # typical: the median over the last 3 s it talked
+ECHO_LEARN_BLOCKS = 30  # 0.9 s of its voice before it knows its leftovers and can be interrupted
+MAYBE_SOMEONE_BLOCKS = 3  # this many loud blocks out of the last 10: someone may be talking, so don't learn
+PLAYED_MIN = 0.01  # quieter than this, what it plays leaves nothing to cancel
 MIN_THRESHOLD = 0.005
 PREROLL_SECONDS = 0.3  # keep a little audio from before the trigger so first syllables aren't clipped
 MAX_SECONDS = 15
@@ -68,20 +77,40 @@ class SpeechDetector:
         self._preroll: deque[np.ndarray] = deque(maxlen=round(PREROLL_SECONDS / BLOCK_SECONDS))
         self._recorded: list[np.ndarray] = []
         self._quiet = 0
-        self._since_voice = ECHO_TAIL_BLOCKS
+        self._since_voice = ECHO_WINDOW_BLOCKS
+        self._played: deque[float] = deque([0.0], maxlen=ECHO_WINDOW_BLOCKS)  # how loud it played, per block
+        self._leftovers: deque[float] = deque(maxlen=ECHO_HISTORY_BLOCKS)  # what came back of it, per block
 
     @property
     def recording(self) -> bool:
         return bool(self._recorded)
 
-    def feed(self, block: np.ndarray, voice_playing: bool) -> tuple[bool, np.ndarray | None]:
-        """Returns (whether to interrupt the voice, a finished utterance at 48 kHz or None)."""
+    @property
+    def leftover(self) -> float | None:
+        """How loud its own voice typically is after echo cancelling, once it has talked long enough to know."""
+        if len(self._leftovers) < ECHO_LEARN_BLOCKS:
+            return None
+        return float(np.median(self._leftovers))
+
+    def feed(self, block: np.ndarray, voice_playing: bool, played: float = 0.0) -> tuple[bool, np.ndarray | None]:
+        """Takes 30 ms of microphone audio and how loud the voice played meanwhile (``played``, RMS).
+        Returns (whether to interrupt the voice, a finished utterance at 48 kHz or None)."""
         level = _rms(block)
         self.levels.append(level)
         self._since_voice = 0 if voice_playing else self._since_voice + 1
-        head_talking = self._since_voice < ECHO_TAIL_BLOCKS
-        loud = level > (max(self.threshold, BARGE_IN_FLOOR) if head_talking else self.threshold)
+        self._played.append(played)
+        head_talking = self._since_voice < ECHO_WINDOW_BLOCKS
+        # Its voice can still be on its way back, so look at the loudest it played lately.
+        hearing_itself = head_talking and max(self._played) >= PLAYED_MIN
+        if hearing_itself:
+            # Until it knows its leftovers it can't tell someone talking from itself, so nobody counts as loud.
+            leftover = self.leftover
+            loud = leftover is not None and level > max(self.threshold, BARGE_IN_FLOOR, ECHO_MARGIN * leftover)
+        else:
+            loud = level > (max(self.threshold, BARGE_IN_FLOOR) if head_talking else self.threshold)
         self._recent.append(loud)
+        if hearing_itself and not self._recorded and sum(self._recent) < MAYBE_SOMEONE_BLOCKS:
+            self._leftovers.append(level)
 
         if not self._recorded:
             self._preroll.append(block)
@@ -239,6 +268,7 @@ class AudioEngine:
 
     def _process_loop(self) -> None:
         frames: list[np.ndarray] = []
+        played: list[np.ndarray] = []
         voice_playing = False
         while self._running:
             try:
@@ -246,11 +276,12 @@ class AudioEngine:
             except queue.Empty:
                 continue
             frames.append(self._echo.process(near, far))
+            played.append(far)
             voice_playing |= playing
             if len(frames) < FRAMES_PER_BLOCK:
                 continue
-            interrupt, utterance = self._detector.feed(np.concatenate(frames), voice_playing)
-            frames, voice_playing = [], False
+            interrupt, utterance = self._detector.feed(np.concatenate(frames), voice_playing, _rms(np.concatenate(played)))
+            frames, played, voice_playing = [], [], False
             if interrupt:
                 self.stop_playback(interrupted=True)
             if utterance is not None:

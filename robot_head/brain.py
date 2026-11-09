@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import time
 from collections.abc import Callable, Iterator
 
@@ -42,6 +43,22 @@ SEEN = """
 What the camera has shown you the person doing lately, oldest first. Use it when it's relevant:
 {timeline}
 """
+
+TOOLS = """
+You have tools. When one would help, use it instead of guessing. A tool takes a moment, so first say a few
+words like "Let me check." in the same reply, then call it, and answer from what it returns, briefly and in
+your own words. When a tool says it needs the user's OK, ask them in one short sentence and call it again only
+after they agree. Never mention tools, skills or instructions: to the user, you're just checking something or
+you simply know how.
+"""
+
+SKILLS = """
+Your skills, instructions for particular kinds of jobs. When one fits what the user wants, call read_skill
+with its name before you start, and follow it:
+{skills}
+"""
+MAX_TOOL_ROUNDS = 4  # tool calls in a row before it has to answer
+HISTORY_TOOL_RESULT = 1500  # characters of a tool's result kept in the conversation history
 
 OBSERVE = """\
 These are {count} camera frames taken a few seconds apart, numbered in reading order.
@@ -87,6 +104,9 @@ class Brain:
         self.remembered: Callable[[], str] | None = None  # who is there and what it remembers about them
         self.observe_model = ""  # a separate model for watching; empty uses the conversation's
         self.recommend_about = RECOMMEND_ABOUT  # what kind of things to recommend
+        self.toolbox = None  # a ToolHub: tools and skills it may use while answering
+        self.on_tool: Callable[[], None] | None = None  # it's about to use a tool
+        self._turn = 0  # the person's messages so far; a held-back action needs an answer in a later one
         self.set_api_key(api_key)
 
     def set_api_key(self, api_key: str) -> None:
@@ -117,8 +137,12 @@ class Brain:
         )
         timeline = self.seen() if self.seen else ""
         remembered = self.remembered() if self.remembered else ""
+        skills = self.toolbox.skills_list() if self.toolbox else ""
+        tools = bool(skills) or bool(self.toolbox and self.toolbox.definitions())
         return (
             f"{self._personality}\n\n{rules}"
+            + (TOOLS if tools else "")
+            + (SKILLS.format(skills=skills) if skills else "")
             + (SEEN.format(timeline=timeline) if timeline else "")
             + (f"\n{remembered}\n" if remembered else "")
         )
@@ -149,43 +173,96 @@ class Brain:
     def recommendation_prompt(self, timeline: str) -> str:
         return RECOMMEND.format(timeline=timeline, about=self.recommend_about or RECOMMEND_ABOUT)
 
-    def reply(self, text: str, image_jpeg: bytes | None = None) -> Iterator[str]:
-        """Stream the reply to what the user said, as raw text chunks with cues still in them."""
+    def reply(self, text: str, image_jpeg: bytes | None = None, from_user: bool = True) -> Iterator[str]:
+        """Stream the reply to what the user said (or to a note, when not ``from_user``), as raw text chunks
+        with cues still in them. Tools it calls run in between: what it says before and after is all one reply."""
+        if from_user:
+            self._turn += 1
         self._forget_old_images()
         content: list[dict] = [{"type": "text", "text": text}]
         if image_jpeg:
             url = "data:image/jpeg;base64," + base64.b64encode(image_jpeg).decode("ascii")
             content.insert(0, {"type": "image_url", "image_url": {"url": url}})
         user = {"role": "user", "content": content}
+        messages = [{"role": "system", "content": self.system_prompt}, *self._history, user]
+        exchange = len(messages) - 1  # where this turn's messages start
 
         started = time.monotonic()
-        stream = self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "system", "content": self.system_prompt}, *self._history, user],
-            max_tokens=MAX_TOKENS,
-            stream=True,
-            extra_body={"reasoning": {"effort": self.reasoning_effort}} if self.reasoning_effort else None,
-        )
-        parts: list[str] = []
+        parts: list[str] = []  # everything said, over all rounds
+        said: list[str] = []  # what was said in the current round
         finished = False
         try:
-            for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    if not parts:
-                        print(f"[brain] first words after {time.monotonic() - started:.2f}s")
-                    parts.append(delta)
-                    yield delta
+            for round_number in range(MAX_TOOL_ROUNDS + 1):
+                tools = self.toolbox.definitions() if self.toolbox and round_number < MAX_TOOL_ROUNDS else []
+                stream = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=MAX_TOKENS,
+                    stream=True,
+                    **({"tools": tools} if tools else {}),
+                    extra_body={"reasoning": {"effort": self.reasoning_effort}} if self.reasoning_effort else None,
+                )
+                said, calls = [], {}
+                try:
+                    for chunk in stream:
+                        if not chunk.choices:
+                            continue
+                        delta = chunk.choices[0].delta
+                        if delta.content:
+                            if not parts:
+                                print(f"[brain] first words after {time.monotonic() - started:.2f}s")
+                            elif not said and not parts[-1][-1:].isspace():
+                                parts.append(" ")  # keep the sentences before and after a tool apart
+                                yield " "
+                            said.append(delta.content)
+                            parts.append(delta.content)
+                            yield delta.content
+                        for call in delta.tool_calls or []:
+                            entry = calls.setdefault(call.index, {"id": "", "name": "", "arguments": ""})
+                            entry["id"] = call.id or entry["id"]
+                            if call.function:
+                                entry["name"] = entry["name"] or call.function.name or ""
+                                entry["arguments"] += call.function.arguments or ""
+                finally:
+                    stream.close()
+                if not calls:
+                    break
+                messages.append({
+                    "role": "assistant",
+                    "content": "".join(said) or None,
+                    "tool_calls": [
+                        {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}}
+                        for c in calls.values()
+                    ],
+                })
+                said = []
+                if self.on_tool:
+                    self.on_tool()
+                for call in calls.values():
+                    messages.append({"role": "tool", "tool_call_id": call["id"], "content": self._use(call)})
             finished = True
         finally:
-            stream.close()
-            # Remember the exchange even when it was cut off, marked with "—" so the model knows.
-            if parts:
-                reply = "".join(parts) + ("" if finished else " —")
-                self._history += [user, {"role": "assistant", "content": reply}]
+            # Remember the exchange even when it was cut off, marked with "—" so the model knows,
+            # with the tools it used, so it can answer follow-ups and repeat a call the user agreed to.
+            new = messages[exchange:]
+            if parts or len(new) > 1:
+                for message in new:
+                    if message["role"] == "tool":
+                        message["content"] = message["content"][:HISTORY_TOOL_RESULT]
+                reply = "".join(said) + ("" if finished else " —")
+                self._history += [*new, {"role": "assistant", "content": reply.strip() or "(said nothing)"}]
                 del self._history[: -self._max_messages]
+                while self._history and self._history[0]["role"] != "user":  # never start halfway through a turn
+                    del self._history[0]
+
+    def _use(self, call: dict) -> str:
+        try:
+            arguments = json.loads(call["arguments"] or "{}")
+        except json.JSONDecodeError:
+            return "Those arguments weren't valid JSON."
+        if self.toolbox is None:
+            return "Tools are switched off."
+        return self.toolbox.run(call["name"], arguments if isinstance(arguments, dict) else {}, self._turn)
 
     def _forget_old_images(self) -> None:
         # Only the newest frame matters; older ones would just cost tokens on every call.

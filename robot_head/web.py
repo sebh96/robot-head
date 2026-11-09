@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import queue
 import socket
@@ -13,7 +14,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .control import Controller
@@ -74,6 +75,44 @@ class ServoIn(BaseModel):
 
 class HoldIn(BaseModel):
     angle: float | None = None
+
+
+class ToolServerIn(BaseModel):
+    # From the registry: name, title, description, the option picked and the answers to its fields.
+    name: str = ""
+    title: str = ""
+    description: str = ""
+    option: dict | None = None
+    values: dict[str, str] | None = None
+    # By address: url, and a header with a key if the service needs one.
+    url: str = ""
+    header: str = ""
+    value: str = ""
+    origin: str = ""  # where the page was opened, for sign-in pages to send people back to
+
+
+class ToolServerUpdate(BaseModel):
+    enabled: bool | None = None
+    keys: dict[str, str] | None = None
+
+
+class ToolChoiceIn(BaseModel):
+    enabled: bool
+    ask_first: bool
+
+
+class SkillIn(BaseModel):
+    source: str = ""  # a catalog entry or a link; or else write one:
+    name: str = ""
+    description: str = ""
+    instructions: str = ""
+
+
+class SkillUpdate(BaseModel):
+    enabled: bool | None = None
+    name: str = ""
+    description: str = ""
+    instructions: str = ""
 
 
 def _checked(action: Callable, *args):
@@ -216,6 +255,67 @@ def create_app(controller: Controller) -> FastAPI:
     @app.post("/api/memory/reflect")
     def reflect() -> None:
         _checked(controller.reflect_now)
+
+    @app.get("/api/tools")
+    def tools() -> dict:
+        return controller.tools()
+
+    @app.get("/api/tools/catalog")
+    def tool_catalog(q: str = "", cursor: str = "") -> dict:
+        """Servers from the official MCP Registry that match ``q``."""
+        return _checked(controller.tool_catalog, q, cursor)
+
+    @app.post("/api/tools/servers")
+    def add_tool_server(body: ToolServerIn) -> dict:
+        return {"id": _checked(controller.add_tool_server, body.model_dump())}
+
+    @app.put("/api/tools/servers/{server_id}")
+    def update_tool_server(server_id: int, body: ToolServerUpdate) -> None:
+        _checked(controller.update_tool_server, server_id, body.model_dump())
+
+    @app.delete("/api/tools/servers/{server_id}")
+    def delete_tool_server(server_id: int) -> None:
+        controller.delete_tool_server(server_id)
+
+    @app.get("/api/tools/oauth/callback")
+    def finish_sign_in(code: str = "", state: str = "", iss: str | None = None, error: str = "") -> HTMLResponse:
+        """Where a server's sign-in page sends the person back to."""
+        try:
+            if error:
+                raise ValueError(f"The sign-in page said: {error}")
+            message, status = f"Back from signing in to {html.escape(controller.finish_sign_in(code, state, iss))}.", 200
+        except ValueError as problem:
+            message, status = html.escape(str(problem)), 400
+        page = (
+            '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
+            '<title>Robot sign-in</title><body style="font: 16px system-ui; background: #15171c; color: #e9e9ec; padding: 40px">'
+            f"<p>{message}</p><p>You can close this tab: the Tools tab in the control panel shows when it's connected.</p></body>"
+        )
+        return HTMLResponse(page, status_code=status)
+
+    @app.put("/api/tools/servers/{server_id}/tools/{tool}")
+    def set_tool_choice(server_id: int, tool: str, body: ToolChoiceIn) -> None:
+        controller.set_tool_choice(server_id, tool, body.enabled, body.ask_first)
+
+    @app.get("/api/skills/catalog")
+    def skill_catalog(source: str = "robot") -> dict:
+        return controller.skill_catalog(source)
+
+    @app.post("/api/skills")
+    def add_skill(body: SkillIn) -> None:
+        _checked(controller.add_skill, body.model_dump())
+
+    @app.get("/api/skills/{skill_id}")
+    def skill(skill_id: int) -> dict:
+        return _checked(controller.skill, skill_id)
+
+    @app.put("/api/skills/{skill_id}")
+    def update_skill(skill_id: int, body: SkillUpdate) -> None:
+        _checked(controller.update_skill, skill_id, body.model_dump())
+
+    @app.delete("/api/skills/{skill_id}")
+    def delete_skill(skill_id: int) -> None:
+        controller.delete_skill(skill_id)
 
     @app.get("/api/personalities")
     def personalities() -> list[dict]:

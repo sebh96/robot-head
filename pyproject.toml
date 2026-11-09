@@ -10,6 +10,7 @@ dependencies = [
     "faster-whisper>=1.1",
     "kokoro-onnx>=0.4",
     "livekit>=1.0",
+    "mcp>=2.3",
     "numpy>=1.26",
     "onnx-asr[hub]>=0.7",
     "openai>=1.60",

@@ -149,6 +149,34 @@
   #wiring-diagram .channel.used text { fill: #fff; }
   @keyframes flow { to { stroke-dashoffset: -12; } }
 
+  /* Tools */
+  .columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .columns { grid-template-columns: 1fr; } }
+  .items { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .items > li { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: grid; gap: 6px; }
+  .items > li.empty { border: 0; padding: 0; }
+  .items .top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .items .top > b { margin-right: auto; }
+  .desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .state { font-size: 13px; color: var(--dim); }
+  .state.ready { color: var(--accent); }
+  .state.connecting { color: var(--warn); }
+  .state.error { color: var(--danger); }
+  .error-text { color: #f2a5a3; font-size: 13px; overflow-wrap: anywhere; }
+  .badge.warn { background: #3a2f17; color: var(--warn); }
+  .tool-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+  .tool-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: start; font-size: 13px; }
+  .stacked { display: grid; gap: 10px; margin-top: 10px; }
+  .stacked label.field span { color: var(--dim); }
+  details > summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+  #by-address { margin-top: 16px; }
+  .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .segmented button { padding: 5px 12px; border: 0; background: none; color: var(--dim); cursor: pointer; font-size: 13px; }
+  .segmented button.active { background: var(--panel-2); color: var(--text); }
+  a { color: var(--accent); }
+  a.btn.primary { display: inline-block; padding: 4px 11px; border-radius: 8px; background: var(--accent); color: var(--accent-ink);
+                  font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+
   /* Servo calibration */
   .servo-table { width: 100%; border-collapse: collapse; font-size: 14px; }
   .servo-table th { text-align: left; color: var(--dim); font-weight: 500; font-size: 12px; padding: 4px 8px; }
@@ -179,6 +207,7 @@
     <button data-tab="personalities">Personalities</button>
     <button data-tab="expressions">Expressions</button>
     <button data-tab="memory">Memory</button>
+    <button data-tab="tools">Tools</button>
     <button data-tab="settings">Settings</button>
   </nav>
 </header>
@@ -308,6 +337,72 @@
     </div>
   </section>
 
+  <section id="tools" class="tab">
+    <div class="columns">
+      <div class="card">
+        <h2>Your tools</h2>
+        <p id="tools-off" class="error-text" hidden>Tools are switched off under Settings, so it won't use any of these.</p>
+        <h3>MCP servers</h3>
+        <ul id="server-list" class="items"></ul>
+        <h3>Skills</h3>
+        <ul id="skill-list" class="items"></ul>
+      </div>
+      <div class="card">
+        <div class="head">
+          <h2>Add</h2>
+          <div class="segmented"><button type="button" data-pane="servers" class="active">MCP servers</button><button type="button" data-pane="skills">Skills</button></div>
+        </div>
+        <div id="pane-servers">
+          <form id="catalog-form" class="row">
+            <input name="q" placeholder="One word from its name: weather, datetime, wikipedia, calendar…" required minlength="2">
+            <button class="btn">Search</button>
+          </form>
+          <p class="dim small">From the official <a href="https://registry.modelcontextprotocol.io" target="_blank" rel="noopener">MCP Registry</a>, which
+            searches the servers' names.
+            Anyone can publish there, so add what you trust: one that runs here is a program on this computer, and an online one sees what it's asked.</p>
+          <ul id="catalog-list" class="items"></ul>
+          <div class="row end" style="margin-top: 8px"><button type="button" class="btn compact" id="catalog-more" hidden>More</button></div>
+          <details id="by-address">
+            <summary>Add by address: Zapier, Composio, Smithery or your own</summary>
+            <form id="address-form" class="stacked">
+              <label class="field">Name<input name="title" placeholder="My Zapier tools"></label>
+              <label class="field">Address<input name="url" placeholder="https://…/mcp" required></label>
+              <div class="row">
+                <label class="field" style="flex: 1">Header<input name="header" value="Authorization"></label>
+                <label class="field" style="flex: 2">Key, if it needs one<input name="value" type="password" placeholder="Bearer …" autocomplete="off"></label>
+              </div>
+              <div class="row end"><button class="btn">Add</button></div>
+            </form>
+          </details>
+        </div>
+        <div id="pane-skills" hidden>
+          <h3>Made for a robot</h3>
+          <ul id="skills-robot" class="items"></ul>
+          <h3>From a link</h3>
+          <form id="skill-link-form" class="row">
+            <input name="source" placeholder="A skills.sh page, a GitHub folder or a SKILL.md link" required>
+            <button class="btn">Add</button>
+          </form>
+          <p class="dim small">Browse thousands at <a href="https://skills.sh" target="_blank" rel="noopener">skills.sh</a> and paste a link here.
+            Only the instructions are used; scripts that come with a skill never run.</p>
+          <h3>Anthropic's examples, mostly for documents and code</h3>
+          <ul id="skills-anthropic" class="items"></ul>
+          <h3 id="skill-form-title">Write your own</h3>
+          <form id="skill-form" class="stacked">
+            <input type="hidden" name="id">
+            <label class="field">Name<input name="name" placeholder="morning-routine" required></label>
+            <label class="field">When to use it<input name="description" placeholder="Use when they say good morning or ask what's on today." required></label>
+            <label class="field">Instructions<textarea name="instructions" rows="8" required placeholder="How it should go about it, step by step."></textarea></label>
+            <div class="row end">
+              <button type="button" class="btn compact" id="skill-form-new" hidden>Write a new one instead</button>
+              <button class="btn">Save skill</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="settings" class="tab">
     <form id="settings-form">
       <div id="setting-groups"></div>
@@ -356,7 +451,7 @@ const failed = error => toast(error.message, true);
 // --- Tabs ---
 const loaders = {
   live: loadLive, wiring: () => Promise.all([loadWiring(), loadCalibration()]), personalities: loadPersonalities,
-  expressions: loadExpressions, memory: loadMemory, settings: loadSettings,
+  expressions: loadExpressions, memory: loadMemory, tools: loadTools, settings: loadSettings,
 };
 let activeTab = "live";
 function showTab(name) {
@@ -1097,6 +1192,255 @@ $("#memory-form").onsubmit = async event => {
 $("#reflect").onclick = async () => {
   try { await api("POST", "/api/memory/reflect"); toast("Thinking it over… new memories show up in a few seconds."); setTimeout(() => loadMemory().catch(failed), 6000); }
   catch (error) { failed(error); }
+};
+
+// --- Tools: MCP servers and skills ---
+const STATES = {ready: "ready", connecting: "connecting…", sign_in: "wants you to sign in", error: "couldn't connect", off: "off"};
+let toolsTimer = null, mySkills = [], catalogQuery = "", catalogNext = "", skillCatalogLoaded = false;
+const small = (text, cls = "dim small") => el("div", {className: cls, textContent: text});
+const button = (text, onclick, cls = "btn compact") => Object.assign(el("button", {className: cls, type: "button", textContent: text}), {onclick});
+
+async function loadTools() {
+  clearTimeout(toolsTimer);
+  const data = await api("GET", "/api/tools");
+  $("#tools-off").hidden = data.enabled;
+  mySkills = data.skills;
+  renderServers(data.servers);
+  renderSkills(data.skills);
+  // Servers connect in the background, some after you've signed in: look again until they're done.
+  if (data.servers.some(s => ["connecting", "sign_in"].includes(s.state)) && activeTab === "tools") {
+    toolsTimer = setTimeout(() => loadTools().catch(failed), 1500);
+  }
+}
+
+function renderServers(servers) {
+  if (!servers.length) return $("#server-list").replaceChildren(el("li", {className: "empty dim small", textContent: "None yet: search for some on the right."}));
+  $("#server-list").replaceChildren(...servers.map(s => {
+    const on = el("input", {type: "checkbox", checked: s.enabled});
+    on.onchange = () => api("PUT", `/api/tools/servers/${s.id}`, {enabled: on.checked}).then(loadTools).catch(failed);
+    const remove = button("Remove", async () => {
+      if (!confirm(`Remove ${s.title} and its tools?`)) return;
+      try { await api("DELETE", `/api/tools/servers/${s.id}`); await loadTools(); } catch (error) { failed(error); }
+    }, "btn compact danger");
+    const count = s.state === "ready" ? ` · ${s.tools.length} tool${s.tools.length === 1 ? "" : "s"}` : "";
+    const item = el("li", {},
+      el("div", {className: "top"}, el("b", {textContent: s.title}), el("span", {className: `state ${s.state}`, textContent: STATES[s.state] + count}),
+        el("label", {className: "switch"}, on, "on"), remove),
+      small(s.where));
+    if (s.description) item.append(small(s.description, "dim small desc"));
+    if (s.state === "sign_in" && s.sign_in_url) {
+      item.append(el("div", {className: "row"},
+        el("a", {className: "btn compact primary", href: s.sign_in_url, target: "_blank", rel: "noopener", textContent: "Sign in"}),
+        small("Opens its sign-in page. Afterwards it comes back here by itself.")));
+    }
+    if (s.error) item.append(small(s.error, "error-text"));
+    if (s.keys.length) item.append(keysForm(s));
+    if (s.tools.length) item.append(toolList(s));
+    return item;
+  }));
+}
+
+function keysForm(s) {
+  const missing = s.keys.some(k => !k.set);
+  const details = el("details", {open: missing}, el("summary", {textContent: "Keys: " + s.keys.map(k => `${k.name} ${k.set ? "✓" : "missing"}`).join(", ")}));
+  const form = el("form", {className: "stacked"},
+    ...s.keys.map(k => el("label", {className: "field"}, k.name,
+      el("input", {name: k.name, type: "password", autocomplete: "off", placeholder: k.set ? "Set. Type to replace it." : "Needed"}))),
+    el("div", {className: "row end"}, el("button", {className: "btn compact", textContent: "Save keys"})));
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const keys = Object.fromEntries([...form.querySelectorAll("input")].map(input => [input.name, input.value]));
+    try { await api("PUT", `/api/tools/servers/${s.id}`, {keys}); toast("Saved. Connecting again."); await loadTools(); } catch (error) { failed(error); }
+  };
+  details.append(form);
+  return details;
+}
+
+function toolList(s) {
+  const summary = el("summary");
+  const count = () => (summary.textContent = `Tools: ${s.tools.filter(t => t.enabled).length} of ${s.tools.length} on`);
+  count();
+  const list = el("ul", {className: "tool-list"}, ...s.tools.map(t => {
+    const on = el("input", {type: "checkbox", checked: t.enabled, title: "It may use this one"});
+    const ask = el("input", {type: "checkbox", checked: t.ask_first});
+    on.onchange = ask.onchange = () => {
+      t.enabled = on.checked;
+      count();
+      api("PUT", `/api/tools/servers/${s.id}/tools/${encodeURIComponent(t.name)}`, {enabled: on.checked, ask_first: ask.checked}).catch(failed);
+    };
+    return el("li", {}, on,
+      el("div", {}, el("b", {textContent: t.name}),
+        t.read_only ? el("span", {
+          className: "badge", textContent: t.guessed ? "only looks, by its name" : "only looks", style: "margin-left: 6px",
+          title: t.guessed ? "The server doesn't say; from its name this tool only looks things up. Check it if unsure." : "",
+        }) : "",
+        small(t.description, "dim desc")),
+      el("label", {className: "switch", title: "It asks you out loud first, and only goes ahead once you say yes"}, ask, "asks first"));
+  }));
+  return el("details", {}, summary, list);
+}
+
+function renderSkills(skills) {
+  if (!skills.length) return $("#skill-list").replaceChildren(el("li", {className: "empty dim small", textContent: "None yet: add some under Skills on the right."}));
+  $("#skill-list").replaceChildren(...skills.map(k => {
+    const on = el("input", {type: "checkbox", checked: k.enabled});
+    on.onchange = () => api("PUT", `/api/skills/${k.id}`, {enabled: on.checked}).catch(failed);
+    const remove = button("Remove", async () => {
+      if (!confirm(`Remove the skill ${k.name}?`)) return;
+      try { await api("DELETE", `/api/skills/${k.id}`); await loadTools(); } catch (error) { failed(error); }
+    }, "btn compact danger");
+    return el("li", {},
+      el("div", {className: "top"}, el("b", {textContent: k.name}), el("label", {className: "switch"}, on, "on"), button("Edit", () => editSkill(k.id).catch(failed)), remove),
+      small(k.description, "dim small desc"), small(skillSource(k.source)));
+  }));
+}
+
+function skillSource(source) {
+  if (source.startsWith("builtin:")) return "comes with the robot";
+  if (source === "yours") return "written by you";
+  try { return "from " + new URL(source).host; } catch { return source; }
+}
+
+// Adding: servers from the registry or by address, skills from the catalog, a link, or written here.
+document.querySelectorAll(".segmented button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".segmented button").forEach(other => other.classList.toggle("active", other === b));
+  $("#pane-servers").hidden = b.dataset.pane !== "servers";
+  $("#pane-skills").hidden = b.dataset.pane !== "skills";
+  if (b.dataset.pane === "skills" && !skillCatalogLoaded) loadSkillCatalog().catch(failed);
+});
+
+$("#catalog-form").onsubmit = event => {
+  event.preventDefault();
+  catalogQuery = event.target.elements.q.value.trim();
+  searchCatalog("").catch(failed);
+};
+$("#catalog-more").onclick = () => searchCatalog(catalogNext).catch(failed);
+
+async function searchCatalog(cursor) {
+  const list = $("#catalog-list");
+  if (!cursor) list.replaceChildren(el("li", {className: "empty dim small", textContent: "Searching… the registry sometimes takes a while."}));
+  let page;
+  try { page = await api("GET", `/api/tools/catalog?q=${encodeURIComponent(catalogQuery)}&cursor=${encodeURIComponent(cursor)}`); }
+  catch (error) { list.replaceChildren(); throw error; }
+  const items = page.servers.map(catalogItem);
+  if (cursor) list.append(...items); else list.replaceChildren(...items);
+  if (!list.children.length) list.replaceChildren(el("li", {className: "empty dim small", textContent: "Nothing found. Try another word."}));
+  catalogNext = page.next;
+  $("#catalog-more").hidden = !page.next;
+}
+
+function catalogItem(entry) {
+  const item = el("li", {});
+  const add = button("Add", () => { if (!item.querySelector("form")) item.append(addForm(entry)); });
+  item.append(
+    el("div", {className: "top"}, el("b", {textContent: entry.title}), el("span", {className: "dim small", textContent: entry.version}), add),
+    small(entry.name),
+    small(entry.description, "small desc"),
+    el("div", {className: "row small", style: "flex-wrap: wrap"}, ...entry.options.map(o => el("span", {
+      className: "badge" + (o.available ? "" : " warn"),
+      textContent: o.label + (o.available ? "" : ": not installed") + (o.fields.some(f => f.required) ? " · needs a key" : ""),
+    }))));
+  return item;
+}
+
+function addForm(entry) {
+  const form = el("form", {className: "stacked"});
+  const pick = el("select", {}, ...entry.options.map((o, i) => el("option", {value: i, textContent: o.label + (o.available ? "" : ` (${o.needs} isn't installed here)`)})));
+  const fields = el("div", {className: "stacked"});
+  const show = () => {
+    const option = entry.options[Number(pick.value)];
+    fields.replaceChildren(...option.fields.map(f => el("label", {className: "field"},
+      f.key + (f.required ? "" : " (optional)"),
+      ...(f.description ? [el("span", {className: "small", textContent: f.description})] : []),
+      f.choices.length
+        ? el("select", {name: f.key}, ...f.choices.map(c => el("option", {textContent: c, selected: c === f.default})))
+        : el("input", {name: f.key, type: f.secret ? "password" : "text", value: f.default, required: f.required, autocomplete: "off"}))));
+    if (!option.fields.length) fields.append(small("It needs nothing else."));
+  };
+  pick.onchange = show;
+  show();
+  if (entry.options.length > 1) form.append(el("label", {className: "field"}, "How to use it", pick));
+  form.append(fields, el("div", {className: "row end"}, button("Cancel", () => form.remove()), el("button", {className: "btn primary", textContent: "Connect"})));
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const option = entry.options[Number(pick.value)];
+    const values = Object.fromEntries([...fields.querySelectorAll("[name]")].map(input => [input.name, input.value]));
+    try {
+      await api("POST", "/api/tools/servers", {name: entry.name, title: entry.title, description: entry.description, option, values, origin: location.origin});
+      form.remove();
+      toast(`Added ${entry.title}. Connecting…`);
+      await loadTools();
+    } catch (error) { failed(error); }
+  };
+  return form;
+}
+
+$("#address-form").onsubmit = async event => {
+  event.preventDefault();
+  const form = event.target, values = Object.fromEntries(new FormData(form));
+  try {
+    await api("POST", "/api/tools/servers", {...values, origin: location.origin});
+    form.reset();
+    toast("Added. Connecting…");
+    await loadTools();
+  } catch (error) { failed(error); }
+};
+
+async function loadSkillCatalog() {
+  skillCatalogLoaded = true;
+  $("#skills-anthropic").replaceChildren(el("li", {className: "empty dim small", textContent: "Getting them from GitHub…"}));
+  const robot = api("GET", "/api/skills/catalog?source=robot"), anthropic = api("GET", "/api/skills/catalog?source=anthropic");
+  const render = (list, skills) => list.replaceChildren(...skills.map(k => {
+    const have = mySkills.some(mine => mine.name === k.name);
+    const add = button(have ? "Added" : "Add", async () => {
+      try { await api("POST", "/api/skills", {source: k.source}); add.textContent = "Added"; add.disabled = true; await loadTools(); } catch (error) { failed(error); }
+    });
+    add.disabled = have;
+    return el("li", {}, el("div", {className: "top"}, el("b", {textContent: k.name}), add), small(k.description, "dim small desc"));
+  }));
+  render($("#skills-robot"), (await robot).skills);
+  const theirs = await anthropic;
+  render($("#skills-anthropic"), theirs.skills);
+  if (theirs.error) $("#skills-anthropic").replaceChildren(el("li", {className: "empty error-text", textContent: theirs.error}));
+}
+
+$("#skill-link-form").onsubmit = async event => {
+  event.preventDefault();
+  try {
+    await api("POST", "/api/skills", {source: event.target.elements.source.value.trim()});
+    event.target.reset();
+    toast("Skill added.");
+    await loadTools();
+  } catch (error) { failed(error); }
+};
+
+async function editSkill(id) {
+  const skill = await api("GET", `/api/skills/${id}`);
+  const form = $("#skill-form");
+  for (const key of ["id", "name", "description", "instructions"]) form.elements[key].value = skill[key];
+  $("#skill-form-title").textContent = `Edit ${skill.name}`;
+  $("#skill-form-new").hidden = false;
+  document.querySelector('.segmented button[data-pane="skills"]').click();
+  form.scrollIntoView({behavior: "smooth", block: "center"});
+}
+
+function newSkillForm() {
+  $("#skill-form").reset();
+  $("#skill-form").elements.id.value = "";
+  $("#skill-form-title").textContent = "Write your own";
+  $("#skill-form-new").hidden = true;
+}
+$("#skill-form-new").onclick = newSkillForm;
+
+$("#skill-form").onsubmit = async event => {
+  event.preventDefault();
+  const {id, ...values} = Object.fromEntries(new FormData(event.target));
+  try {
+    await api(id ? "PUT" : "POST", id ? `/api/skills/${id}` : "/api/skills", values);
+    toast("Skill saved.");
+    newSkillForm();
+    await loadTools();
+  } catch (error) { failed(error); }
 };
 
 // --- Settings ---
