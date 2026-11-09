@@ -124,12 +124,22 @@ class Store:
         self._db.close()
 
     def seed(self, personalities: list[Personality]) -> None:
-        """Fill an empty database: the given personalities, the first one active, and the preset expressions."""
+        """Fill an empty database: the given personalities, the first one active, and the preset expressions.
+
+        After that, a preset that's new (it came with an update) is added once, without switching to it.
+        One that was deleted stays deleted, and one with the name of an existing personality is left out.
+        """
         with self._lock, self._db:
-            if self._db.execute("select count(*) from personalities").fetchone()[0]:
-                return
+            row = self._db.execute("select value from state where key = 'presets'").fetchone()
+            offered = set(json.loads(row[0])) if row else set()
+            have = {name.lower() for (name,) in self._db.execute("select name from personalities")}
             for personality in personalities:
-                self._insert(personality)
+                if not have or (personality.name not in offered and personality.name.lower() not in have):
+                    self._insert(personality)
+            names = json.dumps(sorted(offered | {personality.name for personality in personalities}))
+            self._db.execute("insert or replace into state values ('presets', ?)", (names,))
+            if have:
+                return
             first = self._db.execute("select min(id) from personalities").fetchone()[0]
             self._db.execute("insert or replace into state values ('active_personality', ?)", (str(first),))
             for expression in PRESETS:

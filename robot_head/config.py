@@ -47,7 +47,6 @@ class Settings:
     tts_engine: str
     tts_voice: str
     tts_speed: float
-    wake_name: str
     follow_up_seconds: float
     remark_after_seconds: float
     barge_in: bool
@@ -97,7 +96,6 @@ def load_settings() -> Settings:
         tts_engine=_get("TTS_ENGINE", "kokoro").lower(),
         tts_voice=_get("TTS_VOICE"),  # empty picks the engine's default voice
         tts_speed=float(_get("TTS_SPEED", "1.0")),
-        wake_name=_get("WAKE_NAME"),
         follow_up_seconds=float(_get("FOLLOW_UP_SECONDS", "20")),
         remark_after_seconds=float(_get("REMARK_AFTER_SECONDS", "0")),
         barge_in=_flag("BARGE_IN", True),

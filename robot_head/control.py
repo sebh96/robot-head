@@ -11,6 +11,7 @@ import urllib.request
 from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from dotenv import dotenv_values
 
@@ -28,10 +29,7 @@ from .tools import SEARCH_ENGINES
 MAX_LEARNED_EXPRESSIONS = 40  # so a chatty model can't fill the database with faces
 MODELS_URL = "https://openrouter.ai/api/v1/models"
 
-BOLT_PROMPT = """\
-You are Bolt, a small animatronic head who lives on a workbench in a maker's workshop.
-You are curious, warm and a little cheeky, and you love hearing about what people are building.
-You are proud to be a robot and joke about your servos now and then."""
+FALLBACK_PROMPT = "You are Robot, a friendly animatronic head."
 
 
 @dataclass(frozen=True)
@@ -136,15 +134,20 @@ INTERNET_SETTINGS = {
 }
 
 
-def starter_personalities(settings: Settings) -> list[Personality]:
-    """What a new database starts with: the character from personality.md, and a friendly example."""
-    prompt_file = PROJECT_DIR / "personality.md"
-    prompt = prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else BOLT_PROMPT
-    first_name = prompt.split(",")[0].removeprefix("You are ").strip() if prompt.startswith("You are ") else "Robot"
-    return [
-        Personality(first_name, prompt.strip(), settings.wake_name or first_name, settings.tts_voice, settings.tts_speed),
-        Personality("Bolt", BOLT_PROMPT, "Bolt"),
-    ]
+def _preset(path: Path) -> Personality:
+    prompt = path.read_text(encoding="utf-8").strip()
+    name = prompt.split(",")[0].removeprefix("You are ").strip() if prompt.startswith("You are ") else path.stem.title()
+    return Personality(name, prompt, name)
+
+
+def starter_personalities() -> list[Personality]:
+    """The presets: the character in personality.md first (a new robot starts as it), then those in personalities/."""
+    presets: dict[str, Personality] = {}
+    for path in [PROJECT_DIR / "personality.md", *sorted((PROJECT_DIR / "personalities").glob("*.md"))]:
+        if path.exists():
+            preset = _preset(path)
+            presets.setdefault(preset.name.lower(), preset)
+    return list(presets.values()) or [Personality("Robot", FALLBACK_PROMPT, "Robot")]
 
 
 def _flag(value: str) -> bool:

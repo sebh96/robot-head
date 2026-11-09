@@ -130,7 +130,7 @@ def main() -> None:
     reflex_thread = threading.Thread(target=reflexes.run, args=(stop,), daemon=True)
     reflex_thread.start()
 
-    store.seed(starter_personalities(settings))
+    store.seed(starter_personalities())
     personality = store.active_personality()
     expressions = store.expressions()
     reflexes.set_expressions(expressions)

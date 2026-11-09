@@ -58,10 +58,26 @@ def robot(tmp_path, monkeypatch):
     store.close()
 
 
-def test_seeding_only_happens_once(robot):
-    robot.store.seed([Personality("Someone", "You are someone.")])
+def test_presets_from_an_update_are_added_once(robot):
+    active = robot.state()["personality"]["name"]
+    robot.store.seed([Personality("Daniel", "You are Daniel.", "Daniel"), Personality("Bolt", "You are Bolt.", "Bolt")])
+    assert [p["name"] for p in robot.personalities()] == ["Bolt", "Daniel"]  # nothing twice
+    # A new preset is added, but it doesn't take over.
+    robot.store.seed([Personality("Daniel", "You are Daniel."), Personality("Archie", "You are Archie.", "Archie")])
+    assert [p["name"] for p in robot.personalities()] == ["Archie", "Bolt", "Daniel"]
+    assert robot.state()["personality"]["name"] == active
+    # One you deleted stays deleted.
+    archie = next(p for p in robot.personalities() if p["name"] == "Archie")
+    robot.delete_personality(archie["id"])
+    robot.store.seed([Personality("Archie", "You are Archie.", "Archie")])
     assert [p["name"] for p in robot.personalities()] == ["Bolt", "Daniel"]
     assert "smug" in [e["name"] for e in robot.expressions()]
+
+
+def test_a_new_robot_starts_as_the_character_in_personality_md():
+    presets = control.starter_personalities()
+    assert [p.name for p in presets] == ["Archie", "Bolt", "Daniel"]  # personality.md first, then personalities/
+    assert all(p.wake_name == p.name and p.prompt.startswith(f"You are {p.name},") for p in presets)
 
 
 def test_switching_personality_changes_prompt_and_name(robot):
